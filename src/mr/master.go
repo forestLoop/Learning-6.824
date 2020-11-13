@@ -33,7 +33,7 @@ type Master struct {
 }
 
 // RequestForTask returns one task to the calling worker;
-// if there's no remaining task, returns an empty string
+// if there's no remaining task, returns an error to let workers quit themselves
 func (m *Master) RequestForTask(args *RequestForTaskArgs, reply *RequestForTaskReply) error {
 	for {
 		m.tasksMutex.Lock()
