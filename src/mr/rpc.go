@@ -6,20 +6,34 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
+import (
+	"os"
+	"strconv"
+)
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
+// RequestForTaskArgs is null currently
+type RequestForTaskArgs struct {
 }
 
-type ExampleReply struct {
-	Y int
+// RequestForTaskReply contains information for a map/reduce task
+type RequestForTaskReply struct {
+	IsMap     bool
+	TaskID    int
+	NReduce   int
+	FileToMap string
+}
+
+// UpdateTaskStatusArgs updates the status of a map/reduce task
+type UpdateTaskStatusArgs struct {
+	IsMap     bool
+	TaskID    int
+	FileToMap string
+	Success   bool
+}
+
+// UpdateTaskStatusReply indicates whether the update is successful
+type UpdateTaskStatusReply struct {
+	Success bool
 }
 
 // Add your RPC definitions here.
