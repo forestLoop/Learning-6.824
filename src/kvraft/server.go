@@ -1,12 +1,13 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
-	"../raft"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"../labgob"
+	"../labrpc"
+	"../raft"
 )
 
 const Debug = 0

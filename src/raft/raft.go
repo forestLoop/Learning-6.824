@@ -17,9 +17,12 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"sync"
+	"sync/atomic"
+
+	"../labrpc"
+)
 
 // import "bytes"
 // import "../labgob"
