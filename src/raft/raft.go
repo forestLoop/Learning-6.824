@@ -352,7 +352,7 @@ func (rf *Raft) checkLeaderPeriodically() {
 	for {
 		time.Sleep(checkPeriod)
 		rf.mu.Lock()
-		if rf.state != Leader && rf.nextDeadline.After(time.Now()) { // within election timeout
+		if rf.state == Leader || rf.nextDeadline.After(time.Now()) { // within election timeout
 			rf.mu.Unlock()
 			continue
 		}
