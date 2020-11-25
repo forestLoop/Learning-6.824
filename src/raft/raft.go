@@ -36,6 +36,7 @@ const (
 	electionTimeoutMin int = 700  // ms
 	electionTimeoutMax int = 1000 // ms
 	checkPeriod            = 50 * time.Millisecond
+	heartbeatInterval      = 120 * time.Millisecond
 )
 
 //
@@ -81,6 +82,7 @@ type Raft struct {
 	nextDeadline time.Time           // the next deadline before which a headbeat should be received
 	votes        int                 // votes received as a candidate
 	logger       *log.Logger         // logger for this Raft server
+	leaderCond   *sync.Cond
 	// Persistent state on all servers
 	currentTerm int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
 	votedFor    *int        // candidate that received vote in current term or nil if none
@@ -226,6 +228,43 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// AppendEntriesArgs is the AppendEntries RPC arguments structure.
+type AppendEntriesArgs struct {
+	Term     int // leader's term
+	LeaderID int
+	// TODO: and more...
+}
+
+// AppendEntriesReply is the AppendEntries RPC reply structure.
+type AppendEntriesReply struct {
+	Term    int // receiver's term
+	Success bool
+}
+
+// AppendEntries is the AppendEntries RPC handler.
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.logger.Printf("Start to handle incoming AppendEntries RPC: args = %v", args)
+	defer rf.logger.Printf("Finish handling incoming AppendEntries RPC: reply = %v", reply)
+	// Rule 2 for all servers in Figure 2
+	if args.Term > rf.currentTerm {
+		rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, args.Term)
+		rf.currentTerm = args.Term
+		rf.votedFor = nil // reset votedFor as it's a new term
+		rf.state = Follower
+	}
+	reply.Term = rf.currentTerm
+	reply.Success = false
+	if args.Term < rf.currentTerm {
+		rf.logger.Printf("args.Term (%v) < currentTerm (%v)", args.Term, rf.currentTerm)
+		return
+	}
+	// TODO: more logic here, but now simply treat it as a heartbeat RPC
+	rf.logger.Printf("Get a heartbeat from leader")
+	rf.resetElectionTimer()
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -276,6 +315,37 @@ func (rf *Raft) resetElectionTimer() {
 	electionTimeout := time.Duration(electionTimeoutMin+rand.Int()%(electionTimeoutMax-electionTimeoutMin)) * time.Millisecond
 	rf.nextDeadline = time.Now().Add(electionTimeout)
 	rf.logger.Printf("Reset election timer: electionTimeout = %v, nextDeadline = %v", electionTimeout, rf.nextDeadline.Format("15:04:05.000"))
+}
+
+func (rf *Raft) sendHeartbeats() {
+	for {
+		time.Sleep(heartbeatInterval)
+		rf.leaderCond.L.Lock()
+		// only send heartbeats if it's leader
+		for rf.state != Leader {
+			rf.leaderCond.Wait()
+		}
+		args := AppendEntriesArgs{
+			Term:     rf.currentTerm,
+			LeaderID: rf.me,
+		}
+		rf.logger.Printf("Ready to send heartbeats to all other servers: args = %v", args)
+		for i := 0; i != len(rf.peers); i++ {
+			if i == rf.me {
+				continue
+			}
+			go func(server int) {
+				reply := AppendEntriesReply{}
+				attempts := 0
+				for !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
+					attempts++
+				}
+				rf.logger.Printf("Receive reply for AppendEntries RPC: peer = %v, reply = %v", server, reply)
+				// TODO: more logic here
+			}(i)
+		}
+		rf.leaderCond.L.Unlock()
+	}
 }
 
 func (rf *Raft) checkLeaderPeriodically() {
@@ -333,7 +403,7 @@ func (rf *Raft) checkLeaderPeriodically() {
 					if rf.votes > len(rf.peers)/2 { // collected votes from majority of servers, win!
 						rf.logger.Printf("Win the election: votes = %v, peers = %v", rf.votes, len(rf.peers))
 						rf.state = Leader
-						// TODO: send initial heartbeat to each server upon winning the election
+						rf.leaderCond.Broadcast() // wake up goroutine to send heartbeats
 					}
 				}
 			}(i)
@@ -359,8 +429,10 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.persister = persister
 	rf.me = me
 	rf.logger = log.New(os.Stdout, fmt.Sprintf("[Peer %v]", me), log.Ltime|log.Lmicroseconds)
+	rf.leaderCond = sync.NewCond(&rf.mu)
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.checkLeaderPeriodically()
+	go rf.sendHeartbeats()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
