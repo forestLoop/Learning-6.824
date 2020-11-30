@@ -190,6 +190,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.logger.Printf("Candidate's log is at least as up-to-date as my log? %v", isLogUpToDate)
 	reply.VoteGranted = isLogUpToDate // grant vote if candidate's log is at least as up-to-date as receiver's log
 	if reply.VoteGranted {
+		rf.votedFor = &args.CandidateID
 		rf.resetElectionTimer()
 	}
 }
@@ -430,6 +431,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.me = me
 	rf.logger = log.New(os.Stdout, fmt.Sprintf("[Peer %v]", me), log.Ltime|log.Lmicroseconds)
 	rf.leaderCond = sync.NewCond(&rf.mu)
+	rf.resetElectionTimer()
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.checkLeaderPeriodically()
 	go rf.sendHeartbeats()
@@ -437,4 +439,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
+}
+
+func init() {
+	rand.Seed(time.Now().Unix())
 }
