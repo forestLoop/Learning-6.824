@@ -84,7 +84,9 @@ type Raft struct {
 	nextDeadline time.Time           // the next deadline before which a headbeat should be received
 	votes        int                 // votes received as a candidate
 	logger       *log.Logger         // logger for this Raft server
-	leaderCond   *sync.Cond
+	applyCh      chan ApplyMsg       // channel for apply messages
+	applyCond    *sync.Cond          // condition variable to notify the change of commitIndex
+	leaderCond   *sync.Cond          // condition variable to notify the state conversion to leader
 	// Persistent state on all servers
 	currentTerm int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
 	votedFor    *int        // candidate that received vote in current term or nil if none
@@ -300,6 +302,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if rf.commitIndex > args.LeaderCommit {
 			rf.commitIndex = args.LeaderCommit
 		}
+		rf.applyCond.Broadcast()
 		rf.logger.Printf("Update commitIndex: %v -> %v", oldCommitIndex, rf.commitIndex)
 	}
 	reply.Success = true
@@ -524,8 +527,36 @@ func (rf *Raft) checkCommitIndexPeriodically() {
 		if newCommitIndex > rf.commitIndex {
 			rf.logger.Printf("Update commitIndex: %v -> %v", rf.commitIndex, newCommitIndex)
 			rf.commitIndex = newCommitIndex
+			rf.applyCond.Broadcast()
 		}
 		rf.leaderCond.L.Unlock()
+	}
+}
+
+func (rf *Raft) applyMessages() {
+	rf.logger.Print("Start applyMessages goroutine.")
+	defer rf.logger.Print("Stop applyMessages goroutine.")
+	for !rf.killed() {
+		time.Sleep(heartbeatInterval)
+		rf.applyCond.L.Lock()
+		for rf.commitIndex <= rf.lastApplied {
+			rf.applyCond.Wait()
+		}
+		rf.logger.Printf("Ready to apply messages: commitIndex = %v, lastApplied = %v, log = %v", rf.commitIndex, rf.lastApplied, rf.log)
+		commitIndex := rf.commitIndex
+		rf.applyCond.L.Unlock() // release lock here as applying messages may be blocking
+		// no need to hold mutex for r/w lastApplied as only this goroutine would r/w it
+		for rf.lastApplied < commitIndex {
+			msg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.log[rf.lastApplied].Command,
+				CommandIndex: rf.lastApplied + 1,
+			}
+			rf.logger.Printf("Apply message: msg = %v", msg)
+			rf.applyCh <- msg
+			rf.logger.Printf("Applied: msg = %v", msg)
+			rf.lastApplied++
+		}
 	}
 }
 
@@ -552,6 +583,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		votes:        0,
 		logger:       log.New(os.Stdout, fmt.Sprintf("[Peer %v]", me), log.Ltime|log.Lmicroseconds),
 		leaderCond:   nil,
+		applyCond:    nil,
+		applyCh:      applyCh,
 		// Persistent state on all servers
 		currentTerm: 0,
 		votedFor:    nil,
@@ -564,11 +597,13 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		matchIndex: nil,
 	}
 	rf.leaderCond = sync.NewCond(&rf.mu)
+	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.resetElectionTimer()
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.checkLeaderPeriodically()
 	go rf.sendAppendEntriesPeroidically()
 	go rf.checkCommitIndexPeriodically()
+	go rf.applyMessages()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	return rf
