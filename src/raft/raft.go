@@ -268,7 +268,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// till now, we are sure this RPC is from the current leader
 	rf.resetElectionTimer()
 	// reply false if log doesn’t contain an entry at PrevLogIndex whose term matches PrevLogTerm
-	if len(rf.log) < args.PrevLogIndex || rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+	matched := (args.PrevLogIndex == 0 && len(rf.log) == 0)
+	matched = matched || (1 <= args.PrevLogIndex && args.PrevLogIndex <= len(rf.log) && rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm)
+	if !matched {
 		var entry *LogEntry = nil
 		if len(rf.log) >= args.PrevLogIndex {
 			entry = rf.log[args.PrevLogIndex-1]
@@ -277,6 +279,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// add these entries
+	oldLog := rf.log
 	for i, entry := range args.Entries {
 		if len(rf.log) <= i+args.PrevLogIndex { // out of existing log entries, simply append it
 			rf.log = append(rf.log, entry)
@@ -288,12 +291,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// otherwise, do nothing to this entry
 		}
 	}
+	rf.logger.Printf("Log entries: %v -> %v", oldLog, rf.log)
 	if args.LeaderCommit > rf.commitIndex {
 		// take the min of LeaderCommit and index of last new entry
+		oldCommitIndex := rf.commitIndex
 		rf.commitIndex = args.PrevLogIndex + len(args.Entries)
 		if rf.commitIndex > args.LeaderCommit {
 			rf.commitIndex = args.LeaderCommit
 		}
+		rf.logger.Printf("Update commitIndex: %v -> %v", oldCommitIndex, rf.commitIndex)
 	}
 	reply.Success = true
 }
