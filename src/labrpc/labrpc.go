@@ -59,7 +59,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"../labgob"
+	"github.com/keithnull/Learning-6.824/src/labgob"
 )
 
 type reqMsg struct {

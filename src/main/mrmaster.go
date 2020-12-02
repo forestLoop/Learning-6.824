@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	"../mr"
+	"github.com/keithnull/Learning-6.824/src/mr"
 )
 
 func main() {

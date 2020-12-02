@@ -13,8 +13,8 @@ import (
 	"math/big"
 	"time"
 
-	"../labrpc"
-	"../shardmaster"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
+	"github.com/keithnull/Learning-6.824/src/shardmaster"
 )
 
 //

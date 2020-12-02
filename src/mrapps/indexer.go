@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"../mr"
+	"github.com/keithnull/Learning-6.824/src/mr"
 )
 
 // The mapping function is called once for each piece of the input.

@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"../labrpc"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
 )
 
 // import "bytes"
-// import "../labgob"
+// import "github.com/keithnull/Learning-6.824/src/labgob"
 
 const (
 	electionTimeoutMin int = 700  // ms

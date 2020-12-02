@@ -14,7 +14,7 @@ import (
 	"plugin"
 	"sort"
 
-	"../mr"
+	"github.com/keithnull/Learning-6.824/src/mr"
 )
 
 // for sorting by key.

@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"../labrpc"
-	"../raft"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
+	"github.com/keithnull/Learning-6.824/src/raft"
 
 	// import "log"
 	crand "crypto/rand"

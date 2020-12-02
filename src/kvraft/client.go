@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"math/big"
 
-	"../labrpc"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
 )
 
 type Clerk struct {

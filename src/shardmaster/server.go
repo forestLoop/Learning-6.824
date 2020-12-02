@@ -3,9 +3,9 @@ package shardmaster
 import (
 	"sync"
 
-	"../labgob"
-	"../labrpc"
-	"../raft"
+	"github.com/keithnull/Learning-6.824/src/labgob"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
+	"github.com/keithnull/Learning-6.824/src/raft"
 )
 
 type ShardMaster struct {

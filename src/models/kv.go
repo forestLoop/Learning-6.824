@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"../porcupine"
+	"github.com/keithnull/Learning-6.824/src/porcupine"
 )
 
 type KvInput struct {

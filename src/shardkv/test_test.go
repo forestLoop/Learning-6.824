@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"../models"
-	"../porcupine"
+	"github.com/keithnull/Learning-6.824/src/models"
+	"github.com/keithnull/Learning-6.824/src/porcupine"
 )
 
 const linearizabilityCheckTimeout = 1 * time.Second

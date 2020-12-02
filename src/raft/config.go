@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"../labrpc"
+	"github.com/keithnull/Learning-6.824/src/labrpc"
 
 	crand "crypto/rand"
 	"encoding/base64"
