@@ -318,11 +318,13 @@ func (rf *Raft) resetElectionTimer() {
 	rf.logger.Printf("Reset election timer: electionTimeout = %v, nextDeadline = %v", electionTimeout, rf.nextDeadline.Format("15:04:05.000"))
 }
 
-func (rf *Raft) sendHeartbeats() {
-	for {
+func (rf *Raft) sendAppendEntriesPeroidically() {
+	rf.logger.Print("Start sendAppendEntriesPeroidically goroutine.")
+	defer rf.logger.Print("Stop sendAppendEntriesPeroidically goroutine.")
+	for !rf.killed() {
 		time.Sleep(heartbeatInterval)
 		rf.leaderCond.L.Lock()
-		// only send heartbeats if it's leader
+		// only send AppendEntries if it's leader
 		for rf.state != Leader {
 			rf.leaderCond.Wait()
 		}
@@ -350,7 +352,9 @@ func (rf *Raft) sendHeartbeats() {
 }
 
 func (rf *Raft) checkLeaderPeriodically() {
-	for {
+	rf.logger.Print("Start checkLeaderPeriodically goroutine.")
+	defer rf.logger.Print("Stop checkLeaderPeriodically goroutine.")
+	for !rf.killed() {
 		time.Sleep(checkPeriod)
 		rf.mu.Lock()
 		if rf.state == Leader || rf.nextDeadline.After(time.Now()) { // within election timeout
@@ -425,19 +429,35 @@ func (rf *Raft) checkLeaderPeriodically() {
 // for any long-running work.
 //
 func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
-	rf.logger = log.New(os.Stdout, fmt.Sprintf("[Peer %v]", me), log.Ltime|log.Lmicroseconds)
+	rf := &Raft{
+		mu:           sync.Mutex{},
+		peers:        peers,
+		persister:    persister,
+		me:           me,
+		dead:         0,
+		state:        Follower,
+		nextDeadline: time.Time{},
+		votes:        0,
+		logger:       log.New(os.Stdout, fmt.Sprintf("[Peer %v]", me), log.Ltime|log.Lmicroseconds),
+		leaderCond:   nil,
+		// Persistent state on all servers
+		currentTerm: 0,
+		votedFor:    nil,
+		log:         nil,
+		// Volatile state on all servers
+		commitIndex: 0,
+		lastApplied: 0,
+		// Volatile state on leaders only
+		nextIndex:  nil,
+		matchIndex: nil,
+	}
 	rf.leaderCond = sync.NewCond(&rf.mu)
 	rf.resetElectionTimer()
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.checkLeaderPeriodically()
-	go rf.sendHeartbeats()
+	go rf.sendAppendEntriesPeroidically()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 	return rf
 }
 
