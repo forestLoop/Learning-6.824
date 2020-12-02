@@ -66,9 +66,10 @@ const (
 	Leader
 )
 
-type logEntry struct {
-	Term int
-	// Command
+// LogEntry is an entry in log
+type LogEntry struct {
+	Term    int         // term when entry was received by leader (first index is 1)
+	Command interface{} // command for state machine
 }
 
 // Raft is the Go object implementing a single Raft peer.
@@ -86,7 +87,7 @@ type Raft struct {
 	// Persistent state on all servers
 	currentTerm int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
 	votedFor    *int        // candidate that received vote in current term or nil if none
-	log         []*logEntry // log entries on this server
+	log         []*LogEntry // log entries on this server
 
 	// Volatile state on all servers
 	commitIndex int // index of highest log entry known to be commited (initialized to 0 and increases monotonically)
@@ -280,14 +281,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // term. the third return value is true if this server believes it is
 // the leader.
 //
-func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
-	// Your code here (2B).
-
-	return index, term, isLeader
+func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	isLeader = (rf.state == Leader)
+	if !isLeader {
+		index, term = -1, -1
+		rf.logger.Printf("Sorry but I'm not the leader, fail to start: command = %v, state = %v", command, rf.state)
+		return
+	}
+	rf.log = append(rf.log, &LogEntry{
+		Term:    rf.currentTerm,
+		Command: command,
+	})
+	index = len(rf.log)
+	term = rf.currentTerm
+	rf.logger.Printf("A log entry is appended: term = %v, index = %v, command = %v", term, index, command)
+	return
 }
 
 //
