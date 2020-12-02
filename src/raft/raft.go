@@ -318,6 +318,17 @@ func (rf *Raft) resetElectionTimer() {
 	rf.logger.Printf("Reset election timer: electionTimeout = %v, nextDeadline = %v", electionTimeout, rf.nextDeadline.Format("15:04:05.000"))
 }
 
+// WARNING: must hold mutex before calling this function!
+func (rf *Raft) resetLeaderStates() {
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		rf.nextIndex[i] = len(rf.log) + 1
+		rf.matchIndex[i] = 0
+	}
+	rf.logger.Printf("Reset nextIndex and matchIndex: nextIndex[i] = %v, matchIndex[i] = %v", len(rf.log)+1, 0)
+}
+
 func (rf *Raft) sendAppendEntriesPeroidically() {
 	rf.logger.Print("Start sendAppendEntriesPeroidically goroutine.")
 	defer rf.logger.Print("Stop sendAppendEntriesPeroidically goroutine.")
@@ -408,6 +419,7 @@ func (rf *Raft) checkLeaderPeriodically() {
 					if rf.votes > len(rf.peers)/2 { // collected votes from majority of servers, win!
 						rf.logger.Printf("Win the election: votes = %v, peers = %v", rf.votes, len(rf.peers))
 						rf.state = Leader
+						rf.resetLeaderStates()
 						rf.leaderCond.Broadcast() // wake up goroutine to send heartbeats
 					}
 				}
