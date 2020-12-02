@@ -232,15 +232,18 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 // AppendEntriesArgs is the AppendEntries RPC arguments structure.
 type AppendEntriesArgs struct {
-	Term     int // leader's term
-	LeaderID int
-	// TODO: and more...
+	Term         int         // leader's term
+	LeaderID     int         // so followers can redirect clients
+	PrevLogIndex int         // index of log entry immediately preceding new ones
+	PrevLogTerm  int         // term of PrevLogIndex entry
+	Entries      []*LogEntry // log entries to store (empty for heartbeat; may send more than one for efficiency)
+	LeaderCommit int         // leader's commitIndex
 }
 
 // AppendEntriesReply is the AppendEntries RPC reply structure.
 type AppendEntriesReply struct {
-	Term    int // receiver's term
-	Success bool
+	Term    int  // receiver's term, for leader to update itself
+	Success bool // true if follower contained entry matching PrevLogIndex and PrevLogTerm
 }
 
 // AppendEntries is the AppendEntries RPC handler.
@@ -262,9 +265,37 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.logger.Printf("args.Term (%v) < currentTerm (%v)", args.Term, rf.currentTerm)
 		return
 	}
-	// TODO: more logic here, but now simply treat it as a heartbeat RPC
-	rf.logger.Printf("Get a heartbeat from leader")
+	// till now, we are sure this RPC is from the current leader
 	rf.resetElectionTimer()
+	// reply false if log doesn’t contain an entry at PrevLogIndex whose term matches PrevLogTerm
+	if len(rf.log) < args.PrevLogIndex || rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+		var entry *LogEntry = nil
+		if len(rf.log) >= args.PrevLogIndex {
+			entry = rf.log[args.PrevLogIndex-1]
+		}
+		rf.logger.Printf("Log doesn't contain a matching entry at PrevLogIndex: PrevLogTerm = %v, log entry = %v", args.PrevLogTerm, entry)
+		return
+	}
+	// add these entries
+	for i, entry := range args.Entries {
+		if len(rf.log) <= i+args.PrevLogIndex { // out of existing log entries, simply append it
+			rf.log = append(rf.log, entry)
+		} else { // still within existing log entries
+			if entry.Term != rf.log[args.PrevLogIndex+i].Term { // conflicting entry
+				rf.log = rf.log[:args.PrevLogIndex+i] // delete the existing entry and all that follow it
+				rf.log = append(rf.log, entry)
+			}
+			// otherwise, do nothing to this entry
+		}
+	}
+	if args.LeaderCommit > rf.commitIndex {
+		// take the min of LeaderCommit and index of last new entry
+		rf.commitIndex = args.PrevLogIndex + len(args.Entries)
+		if rf.commitIndex > args.LeaderCommit {
+			rf.commitIndex = args.LeaderCommit
+		}
+	}
+	reply.Success = true
 }
 
 //
