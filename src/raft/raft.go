@@ -22,6 +22,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -386,24 +387,54 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 		for rf.state != Leader {
 			rf.leaderCond.Wait()
 		}
-		args := AppendEntriesArgs{
-			Term:     rf.currentTerm,
-			LeaderID: rf.me,
-		}
-		rf.logger.Printf("Ready to send heartbeats to all other servers: args = %v", args)
 		for i := 0; i != len(rf.peers); i++ {
 			if i == rf.me {
 				continue
 			}
-			go func(server int) {
+			args := AppendEntriesArgs{
+				Term:         rf.currentTerm,
+				LeaderID:     rf.me,
+				LeaderCommit: rf.commitIndex,
+			}
+			prevLogIndex := rf.nextIndex[i] - 1
+			if prevLogIndex == 0 {
+				args.PrevLogTerm = 0
+			} else if prevLogIndex <= len(rf.log) {
+				args.PrevLogTerm = rf.log[prevLogIndex-1].Term
+			} else { // would this ever be possible?
+				rf.logger.Fatalf("Invalid PrevLogIndex: PrevLogIndex = %v, nextIndex[%v] = %v, len(log) = %v", prevLogIndex, i, rf.nextIndex[i], len(rf.log))
+			}
+			args.PrevLogIndex = prevLogIndex
+			args.Entries = rf.log[prevLogIndex:]
+			go func(server int, args AppendEntriesArgs) {
+				rf.logger.Printf("Send AppendEntries RPC to peer %v: args = %v", server, args)
 				reply := AppendEntriesReply{}
 				attempts := 0
 				for !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
 					attempts++
 				}
-				rf.logger.Printf("Receive reply for AppendEntries RPC: peer = %v, reply = %v", server, reply)
-				// TODO: more logic here
-			}(i)
+				rf.logger.Printf("Receive reply for AppendEntries RPC from peer %v: reply = %v", server, reply)
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				// Rule 2 for all servers in Figure 2
+				if reply.Term > rf.currentTerm {
+					rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, reply.Term)
+					rf.currentTerm = reply.Term
+					rf.votedFor = nil // reset votedFor as it's a new term
+					rf.state = Follower
+				}
+				if reply.Success {
+					newNextIndex := args.PrevLogIndex + 1 + len(args.Entries)
+					newMatchIndex := args.PrevLogIndex + len(args.Entries)
+					rf.logger.Printf("Success: nextIndex[%v] = %v -> %v, matchIndex[%v] = %v -> %v", server, rf.nextIndex[server], newNextIndex, server, rf.matchIndex[server], newMatchIndex)
+					rf.nextIndex[server] = newNextIndex
+					rf.matchIndex[server] = newMatchIndex
+				} else {
+					newNextIndex := rf.nextIndex[server] - 1
+					rf.logger.Printf("Failure: nextIndex[%v] = %v -> %v", server, rf.nextIndex[server], newNextIndex)
+					rf.nextIndex[server] = newNextIndex
+				}
+			}(i, args)
 		}
 		rf.leaderCond.L.Unlock()
 	}
@@ -476,6 +507,28 @@ func (rf *Raft) checkLeaderPeriodically() {
 	}
 }
 
+func (rf *Raft) checkCommitIndexPeriodically() {
+	rf.logger.Print("Start checkCommitIndexPeriodically goroutine.")
+	defer rf.logger.Print("Stop checkCommitIndexPeriodically goroutine.")
+	for !rf.killed() {
+		time.Sleep(heartbeatInterval)
+		rf.leaderCond.L.Lock()
+		// only advance commitIndex if it's leader
+		for rf.state != Leader {
+			rf.leaderCond.Wait()
+		}
+		rf.logger.Printf("Check commitIndex: commitIndex = %v, matchIndex = %v", rf.commitIndex, rf.matchIndex)
+		sortedMatchIndex := append([]int(nil), rf.matchIndex...)
+		sort.Ints(sortedMatchIndex)
+		newCommitIndex := sortedMatchIndex[len(rf.peers)/2]
+		if newCommitIndex > rf.commitIndex {
+			rf.logger.Printf("Update commitIndex: %v -> %v", rf.commitIndex, newCommitIndex)
+			rf.commitIndex = newCommitIndex
+		}
+		rf.leaderCond.L.Unlock()
+	}
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -515,6 +568,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	// Your initialization code here (2A, 2B, 2C).
 	go rf.checkLeaderPeriodically()
 	go rf.sendAppendEntriesPeroidically()
+	go rf.checkCommitIndexPeriodically()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	return rf
