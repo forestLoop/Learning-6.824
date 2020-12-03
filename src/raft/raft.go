@@ -19,6 +19,7 @@ package raft
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
@@ -275,7 +276,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	matched = matched || (1 <= args.PrevLogIndex && args.PrevLogIndex <= len(rf.log) && rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm)
 	if !matched {
 		var entry *LogEntry = nil
-		if len(rf.log) >= args.PrevLogIndex {
+		if len(rf.log) >= args.PrevLogIndex && args.PrevLogIndex >= 1 {
 			entry = rf.log[args.PrevLogIndex-1]
 		}
 		rf.logger.Printf("Log doesn't contain a matching entry at PrevLogIndex: PrevLogTerm = %v, log entry = %v", args.PrevLogTerm, entry)
@@ -354,6 +355,8 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
+	rf.logger.Print("Killed")
+	rf.logger.SetOutput(ioutil.Discard)
 	// Your code here, if desired.
 }
 
@@ -402,7 +405,7 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 			prevLogIndex := rf.nextIndex[i] - 1
 			if prevLogIndex == 0 {
 				args.PrevLogTerm = 0
-			} else if prevLogIndex <= len(rf.log) {
+			} else if prevLogIndex > 0 && prevLogIndex <= len(rf.log) {
 				args.PrevLogTerm = rf.log[prevLogIndex-1].Term
 			} else { // would this ever be possible?
 				rf.logger.Fatalf("Invalid PrevLogIndex: PrevLogIndex = %v, nextIndex[%v] = %v, len(log) = %v", prevLogIndex, i, rf.nextIndex[i], len(rf.log))
@@ -425,6 +428,9 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 					rf.currentTerm = reply.Term
 					rf.votedFor = nil // reset votedFor as it's a new term
 					rf.state = Follower
+				}
+				if rf.state != Leader || args.Term != rf.currentTerm || args.PrevLogIndex != rf.nextIndex[server]-1 {
+					return // discard outdated reply
 				}
 				if reply.Success {
 					newNextIndex := args.PrevLogIndex + 1 + len(args.Entries)
@@ -523,7 +529,10 @@ func (rf *Raft) checkCommitIndexPeriodically() {
 		rf.logger.Printf("Check commitIndex: commitIndex = %v, matchIndex = %v", rf.commitIndex, rf.matchIndex)
 		sortedMatchIndex := append([]int(nil), rf.matchIndex...)
 		sort.Ints(sortedMatchIndex)
-		newCommitIndex := sortedMatchIndex[len(rf.peers)/2]
+		newCommitIndex := sortedMatchIndex[len(rf.peers)/2+1]
+		for newCommitIndex > rf.commitIndex && rf.log[newCommitIndex-1].Term != rf.currentTerm {
+			newCommitIndex--
+		}
 		if newCommitIndex > rf.commitIndex {
 			rf.logger.Printf("Update commitIndex: %v -> %v", rf.commitIndex, newCommitIndex)
 			rf.commitIndex = newCommitIndex
@@ -596,6 +605,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		nextIndex:  nil,
 		matchIndex: nil,
 	}
+	// rf.logger.SetOutput(ioutil.Discard)
 	rf.leaderCond = sync.NewCond(&rf.mu)
 	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.resetElectionTimer()
