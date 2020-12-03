@@ -188,10 +188,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.logger.Printf("Already voted for another candidate: votedFor = %v, candidateID = %v", *rf.votedFor, args.CandidateID)
 		return
 	}
-	// 1. receiver has no log or its last log term is older than candidate's last log term
-	isLogUpToDate := len(rf.log) == 0 || rf.log[len(rf.log)-1].Term < args.LastLogTerm
+	// 1. receiver's last log term is older than candidate's last log term
+	isLogUpToDate := rf.log[len(rf.log)-1].Term < args.LastLogTerm
 	// 2. receiver's last log term is the same as candidate's last log term, but its log is shorter
-	isLogUpToDate = isLogUpToDate || (rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log) <= args.LastLogIndex)
+	isLogUpToDate = isLogUpToDate || (rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log) <= args.LastLogIndex+1)
 	rf.logger.Printf("Candidate's log is at least as up-to-date as my log? %v", isLogUpToDate)
 	reply.VoteGranted = isLogUpToDate // grant vote if candidate's log is at least as up-to-date as receiver's log
 	if reply.VoteGranted {
@@ -246,8 +246,10 @@ type AppendEntriesArgs struct {
 
 // AppendEntriesReply is the AppendEntries RPC reply structure.
 type AppendEntriesReply struct {
-	Term    int  // receiver's term, for leader to update itself
-	Success bool // true if follower contained entry matching PrevLogIndex and PrevLogTerm
+	Term            int  // receiver's term, for leader to update itself
+	Success         bool // true if follower contained entry matching PrevLogIndex and PrevLogTerm
+	ConflictingTerm int  // if mismatched, the term of the conflicting entry
+	FirstIndex      int  // if mismatched, the first index it stores for that term
 }
 
 // AppendEntries is the AppendEntries RPC handler.
@@ -272,24 +274,37 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// till now, we are sure this RPC is from the current leader
 	rf.resetElectionTimer()
 	// reply false if log doesn’t contain an entry at PrevLogIndex whose term matches PrevLogTerm
-	matched := (args.PrevLogIndex == 0 && len(rf.log) == 0)
-	matched = matched || (1 <= args.PrevLogIndex && args.PrevLogIndex <= len(rf.log) && rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm)
+	matched := (0 <= args.PrevLogIndex && args.PrevLogIndex < len(rf.log) && rf.log[args.PrevLogIndex].Term == args.PrevLogTerm)
 	if !matched {
 		var entry *LogEntry = nil
-		if len(rf.log) >= args.PrevLogIndex && args.PrevLogIndex >= 1 {
-			entry = rf.log[args.PrevLogIndex-1]
+		if args.PrevLogIndex < 0 { // would this be possible?
+			reply.ConflictingTerm = 0
+			reply.FirstIndex = 0
+			rf.logger.Fatalf("Oops: PrevLogIndex = %v, PrevLogTerm = %v, log = %v", args.PrevLogIndex, args.PrevLogTerm, rf.log)
+		} else if args.PrevLogIndex >= len(rf.log) {
+			reply.ConflictingTerm = -1
+			reply.FirstIndex = len(rf.log)
+		} else {
+			entry = rf.log[args.PrevLogIndex]
+			reply.ConflictingTerm = entry.Term
+			reply.FirstIndex = args.PrevLogIndex
+			for reply.FirstIndex >= 0 && rf.log[reply.FirstIndex].Term == reply.ConflictingTerm {
+				reply.FirstIndex--
+			}
+			reply.FirstIndex++
 		}
 		rf.logger.Printf("Log doesn't contain a matching entry at PrevLogIndex: PrevLogTerm = %v, log entry = %v", args.PrevLogTerm, entry)
+		rf.logger.Printf("Fast stepback: ConflictingTerm = %v, FirstIndex = %v, log = %v", reply.ConflictingTerm, reply.FirstIndex, rf.log)
 		return
 	}
 	// add these entries
 	oldLog := rf.log
 	for i, entry := range args.Entries {
-		if len(rf.log) <= i+args.PrevLogIndex { // out of existing log entries, simply append it
+		if len(rf.log) <= i+args.PrevLogIndex+1 { // out of existing log entries, simply append it
 			rf.log = append(rf.log, entry)
 		} else { // still within existing log entries
-			if entry.Term != rf.log[args.PrevLogIndex+i].Term { // conflicting entry
-				rf.log = rf.log[:args.PrevLogIndex+i] // delete the existing entry and all that follow it
+			if entry.Term != rf.log[args.PrevLogIndex+i+1].Term { // conflicting entry
+				rf.log = rf.log[:args.PrevLogIndex+i+1] // delete the existing entry and all that follow it
 				rf.log = append(rf.log, entry)
 			}
 			// otherwise, do nothing to this entry
@@ -336,7 +351,7 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 		Term:    rf.currentTerm,
 		Command: command,
 	})
-	index = len(rf.log)
+	index = len(rf.log) - 1
 	term = rf.currentTerm
 	rf.logger.Printf("A log entry is appended: term = %v, index = %v, command = %v", term, index, command)
 	return
@@ -377,10 +392,10 @@ func (rf *Raft) resetLeaderStates() {
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	for i := 0; i < len(rf.peers); i++ {
-		rf.nextIndex[i] = len(rf.log) + 1
+		rf.nextIndex[i] = len(rf.log)
 		rf.matchIndex[i] = 0
 	}
-	rf.logger.Printf("Reset nextIndex and matchIndex: nextIndex[i] = %v, matchIndex[i] = %v", len(rf.log)+1, 0)
+	rf.logger.Printf("Reset nextIndex and matchIndex: nextIndex[i] = %v, matchIndex[i] = %v", len(rf.log), 0)
 }
 
 func (rf *Raft) sendAppendEntriesPeroidically() {
@@ -397,21 +412,15 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 			if i == rf.me {
 				continue
 			}
+			prevLogIndex := rf.nextIndex[i] - 1
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderID:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  rf.log[prevLogIndex].Term,
 				LeaderCommit: rf.commitIndex,
+				Entries:      rf.log[prevLogIndex+1:],
 			}
-			prevLogIndex := rf.nextIndex[i] - 1
-			if prevLogIndex == 0 {
-				args.PrevLogTerm = 0
-			} else if prevLogIndex > 0 && prevLogIndex <= len(rf.log) {
-				args.PrevLogTerm = rf.log[prevLogIndex-1].Term
-			} else { // would this ever be possible?
-				rf.logger.Fatalf("Invalid PrevLogIndex: PrevLogIndex = %v, nextIndex[%v] = %v, len(log) = %v", prevLogIndex, i, rf.nextIndex[i], len(rf.log))
-			}
-			args.PrevLogIndex = prevLogIndex
-			args.Entries = rf.log[prevLogIndex:]
 			go func(server int, args AppendEntriesArgs) {
 				rf.logger.Printf("Send AppendEntries RPC to peer %v: args = %v", server, args)
 				reply := AppendEntriesReply{}
@@ -439,7 +448,7 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 					rf.nextIndex[server] = newNextIndex
 					rf.matchIndex[server] = newMatchIndex
 				} else {
-					newNextIndex := rf.nextIndex[server] - 1
+					newNextIndex := reply.FirstIndex
 					rf.logger.Printf("Failure: nextIndex[%v] = %v -> %v", server, rf.nextIndex[server], newNextIndex)
 					rf.nextIndex[server] = newNextIndex
 				}
@@ -470,11 +479,8 @@ func (rf *Raft) checkLeaderPeriodically() {
 		args := RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CandidateID:  rf.me,
-			LastLogIndex: len(rf.log),
-			LastLogTerm:  0,
-		}
-		if len(rf.log) != 0 { // in case there's no log at all
-			args.LastLogTerm = rf.log[len(rf.log)-1].Term
+			LastLogIndex: len(rf.log) - 1,
+			LastLogTerm:  rf.log[len(rf.log)-1].Term,
 		}
 		rf.logger.Printf("Ready to send RequestVote RPCs to all other servers: args = %v", args)
 		for i := 0; i < len(rf.peers); i++ {
@@ -530,7 +536,7 @@ func (rf *Raft) checkCommitIndexPeriodically() {
 		sortedMatchIndex := append([]int(nil), rf.matchIndex...)
 		sort.Ints(sortedMatchIndex)
 		newCommitIndex := sortedMatchIndex[len(rf.peers)/2+1]
-		for newCommitIndex > rf.commitIndex && rf.log[newCommitIndex-1].Term != rf.currentTerm {
+		for newCommitIndex > rf.commitIndex && rf.log[newCommitIndex].Term != rf.currentTerm {
 			newCommitIndex--
 		}
 		if newCommitIndex > rf.commitIndex {
@@ -556,15 +562,16 @@ func (rf *Raft) applyMessages() {
 		rf.applyCond.L.Unlock() // release lock here as applying messages may be blocking
 		// no need to hold mutex for r/w lastApplied as only this goroutine would r/w it
 		for rf.lastApplied < commitIndex {
+			rf.lastApplied++
 			msg := ApplyMsg{
 				CommandValid: true,
 				Command:      rf.log[rf.lastApplied].Command,
-				CommandIndex: rf.lastApplied + 1,
+				CommandIndex: rf.lastApplied,
 			}
 			rf.logger.Printf("Apply message: msg = %v", msg)
 			rf.applyCh <- msg
 			rf.logger.Printf("Applied: msg = %v", msg)
-			rf.lastApplied++
+
 		}
 	}
 }
@@ -605,7 +612,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		nextIndex:  nil,
 		matchIndex: nil,
 	}
-	// rf.logger.SetOutput(ioutil.Discard)
+	rf.log = append(rf.log, &LogEntry{0, nil}) // add one dummy log entry for simplicity in coding
+	rf.logger.SetOutput(ioutil.Discard)
 	rf.leaderCond = sync.NewCond(&rf.mu)
 	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.resetElectionTimer()
