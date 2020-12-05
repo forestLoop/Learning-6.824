@@ -39,6 +39,7 @@ const (
 	electionTimeoutMax int = 1000 // ms
 	checkPeriod            = 50 * time.Millisecond
 	heartbeatInterval      = 120 * time.Millisecond
+	maxAttempts            = 1 // max attempts for each RPC request
 )
 
 //
@@ -424,11 +425,14 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 			go func(server int, args AppendEntriesArgs) {
 				rf.logger.Printf("Send AppendEntries RPC to peer %v: args = %v", server, args)
 				reply := AppendEntriesReply{}
-				attempts := 0
+				attempts := 1
 				for !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
 					attempts++
+					if attempts > maxAttempts {
+						return
+					}
 				}
-				rf.logger.Printf("Receive reply for AppendEntries RPC from peer %v: reply = %v", server, reply)
+				rf.logger.Printf("Receive reply for AppendEntries RPC from peer %v: reply = %v, attempts = %v", server, reply, attempts)
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				// Rule 2 for all servers in Figure 2
@@ -491,9 +495,10 @@ func (rf *Raft) checkLeaderPeriodically() {
 				reply := RequestVoteReply{}
 				attempts := 1
 				for !rf.sendRequestVote(server, &args, &reply) {
-					// repeat until success
-					// rf.logger.Printf("Failed to get response for RequestVote, resend again: peer = %v", server)
 					attempts++
+					if attempts > maxAttempts {
+						return
+					}
 				}
 				rf.logger.Printf("Get reply for RequestVote RPC: peer = %v, attempts = %v, reply = %v", server, attempts, reply)
 				rf.mu.Lock()
