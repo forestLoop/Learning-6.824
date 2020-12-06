@@ -31,8 +31,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.logger.Printf("args.Term (%v) < currentTerm (%v)", args.Term, rf.currentTerm)
 		return
 	}
-	if rf.votedFor != nil && *rf.votedFor != args.CandidateID { //  receiver has already voted for another candidate
-		rf.logger.Printf("Already voted for another candidate: votedFor = %v, candidateID = %v", *rf.votedFor, args.CandidateID)
+	if rf.votedFor != -1 && rf.votedFor != args.CandidateID { //  receiver has already voted for another candidate
+		rf.logger.Printf("Already voted for another candidate: votedFor = %v, candidateID = %v", rf.votedFor, args.CandidateID)
 		return
 	}
 	// 1. receiver's last log term is older than candidate's last log term
@@ -42,7 +42,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.logger.Printf("Candidate's log is at least as up-to-date as my log? %v", isLogUpToDate)
 	reply.VoteGranted = isLogUpToDate // grant vote if candidate's log is at least as up-to-date as receiver's log
 	if reply.VoteGranted {
-		rf.votedFor = &args.CandidateID
+		rf.votedFor = args.CandidateID
 		rf.resetElectionTimer()
 	}
 }
