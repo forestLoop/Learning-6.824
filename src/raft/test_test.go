@@ -455,8 +455,8 @@ func TestCount2B(t *testing.T) {
 		}
 		return
 	}
-
-	leader := cfg.checkOneLeader()
+	var leader int
+	_ = cfg.checkOneLeader()
 
 	total1 := rpcs()
 

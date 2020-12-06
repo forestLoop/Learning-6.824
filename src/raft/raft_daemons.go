@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-func (rf *Raft) sendAppendEntriesPeroidically() {
-	rf.logger.Print("Start sendAppendEntriesPeroidically goroutine.")
-	defer rf.logger.Print("Stop sendAppendEntriesPeroidically goroutine.")
+func (rf *Raft) logReplicationDaemon() {
+	rf.logger.Print("Start logReplicationDaemon goroutine.")
+	defer rf.logger.Print("Stop logReplicationDaemon goroutine.")
 	for !rf.killed() {
 		time.Sleep(heartbeatInterval)
 		rf.leaderCond.L.Lock()
@@ -41,13 +41,7 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 				rf.logger.Printf("Receive reply for AppendEntries RPC from peer %v: reply = %v, attempts = %v", server, reply, attempts)
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				// Rule 2 for all servers in Figure 2
-				if reply.Term > rf.currentTerm {
-					rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, reply.Term)
-					rf.currentTerm = reply.Term
-					rf.votedFor = nil // reset votedFor as it's a new term
-					rf.state = Follower
-				}
+				rf.checkTerm(reply.Term)
 				if rf.state != Leader || args.Term != rf.currentTerm || args.PrevLogIndex != rf.nextIndex[server]-1 {
 					return // discard outdated reply
 				}
@@ -68,9 +62,9 @@ func (rf *Raft) sendAppendEntriesPeroidically() {
 	}
 }
 
-func (rf *Raft) checkLeaderPeriodically() {
-	rf.logger.Print("Start checkLeaderPeriodically goroutine.")
-	defer rf.logger.Print("Stop checkLeaderPeriodically goroutine.")
+func (rf *Raft) leaderElectionDaemon() {
+	rf.logger.Print("Start leaderElectionDaemon goroutine.")
+	defer rf.logger.Print("Stop leaderElectionDaemon goroutine.")
 	for !rf.killed() {
 		time.Sleep(checkPeriod)
 		rf.mu.Lock()
@@ -109,13 +103,7 @@ func (rf *Raft) checkLeaderPeriodically() {
 				rf.logger.Printf("Get reply for RequestVote RPC: peer = %v, attempts = %v, reply = %v", server, attempts, reply)
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				// Rule 2 for all servers in Figure 2
-				if reply.Term > rf.currentTerm {
-					rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, reply.Term)
-					rf.currentTerm = reply.Term
-					rf.votedFor = nil // reset votedFor as it's a new term
-					rf.state = Follower
-				}
+				rf.checkTerm(reply.Term)
 				// it's important to check this vote is valid and NOT stale
 				if reply.VoteGranted && rf.state == Candidate && rf.currentTerm == reply.Term {
 					rf.votes++
@@ -133,9 +121,9 @@ func (rf *Raft) checkLeaderPeriodically() {
 	}
 }
 
-func (rf *Raft) checkCommitIndexPeriodically() {
-	rf.logger.Print("Start checkCommitIndexPeriodically goroutine.")
-	defer rf.logger.Print("Stop checkCommitIndexPeriodically goroutine.")
+func (rf *Raft) commitIndexDaemon() {
+	rf.logger.Print("Start commitIndexDaemon goroutine.")
+	defer rf.logger.Print("Stop commitIndexDaemon goroutine.")
 	for !rf.killed() {
 		time.Sleep(heartbeatInterval)
 		rf.leaderCond.L.Lock()
@@ -150,18 +138,14 @@ func (rf *Raft) checkCommitIndexPeriodically() {
 		for newCommitIndex > rf.commitIndex && rf.log[newCommitIndex].Term != rf.currentTerm {
 			newCommitIndex--
 		}
-		if newCommitIndex > rf.commitIndex {
-			rf.logger.Printf("Update commitIndex: %v -> %v", rf.commitIndex, newCommitIndex)
-			rf.commitIndex = newCommitIndex
-			rf.applyCond.Broadcast()
-		}
+		rf.tryUpdateCommitIndex(newCommitIndex)
 		rf.leaderCond.L.Unlock()
 	}
 }
 
-func (rf *Raft) applyMessages() {
-	rf.logger.Print("Start applyMessages goroutine.")
-	defer rf.logger.Print("Stop applyMessages goroutine.")
+func (rf *Raft) applyMessagesDaemon() {
+	rf.logger.Print("Start applyMessagesDaemon goroutine.")
+	defer rf.logger.Print("Stop applyMessagesDaemon goroutine.")
 	for !rf.killed() {
 		time.Sleep(heartbeatInterval)
 		rf.applyCond.L.Lock()
@@ -182,7 +166,6 @@ func (rf *Raft) applyMessages() {
 			rf.logger.Printf("Apply message: msg = %v", msg)
 			rf.applyCh <- msg
 			rf.logger.Printf("Applied: msg = %v", msg)
-
 		}
 	}
 }

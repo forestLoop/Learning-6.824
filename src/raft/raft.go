@@ -19,7 +19,6 @@ package raft
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
@@ -86,7 +85,7 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	rf.logger.Print("Killed")
-	rf.logger.SetOutput(ioutil.Discard)
+	muteLogger(rf.logger)
 }
 
 func (rf *Raft) killed() bool {
@@ -122,7 +121,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		// Persistent state on all servers
 		currentTerm: 0,
 		votedFor:    nil,
-		log:         nil,
+		log:         []*LogEntry{{0, nil}}, // add one dummy log entry for simplicity in coding
 		// Volatile state on all servers
 		commitIndex: 0,
 		lastApplied: 0,
@@ -130,16 +129,15 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		nextIndex:  nil,
 		matchIndex: nil,
 	}
-	rf.log = append(rf.log, &LogEntry{0, nil}) // add one dummy log entry for simplicity in coding
-	rf.logger.SetOutput(ioutil.Discard)
+	muteLoggerIfUnset(rf.logger, "debug")
 	rf.leaderCond = sync.NewCond(&rf.mu)
 	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.resetElectionTimer()
 	// Your initialization code here (2A, 2B, 2C).
-	go rf.checkLeaderPeriodically()
-	go rf.sendAppendEntriesPeroidically()
-	go rf.checkCommitIndexPeriodically()
-	go rf.applyMessages()
+	go rf.leaderElectionDaemon()
+	go rf.logReplicationDaemon()
+	go rf.commitIndexDaemon()
+	go rf.applyMessagesDaemon()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	return rf
