@@ -24,13 +24,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	rf.logger.Printf("Start to handle incoming RequestVote RPC: args = %v", args)
 	defer rf.logger.Printf("Finish handling incoming RequestVote RPC: reply = %v", reply)
-	// Rule 2 for all servers in Figure 2
-	if args.Term > rf.currentTerm {
-		rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, args.Term)
-		rf.currentTerm = args.Term
-		rf.votedFor = nil // reset votedFor as it's a new term
-		rf.state = Follower
-	}
+	rf.checkTerm(args.Term)
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false       // by default, deny the request
 	if args.Term < rf.currentTerm { // candidate's term is older than receiver
@@ -79,13 +73,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	rf.logger.Printf("Start to handle incoming AppendEntries RPC: args = %v", args)
 	defer rf.logger.Printf("Finish handling incoming AppendEntries RPC: reply = %v", reply)
-	// Rule 2 for all servers in Figure 2
-	if args.Term > rf.currentTerm {
-		rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, args.Term)
-		rf.currentTerm = args.Term
-		rf.votedFor = nil // reset votedFor as it's a new term
-		rf.state = Follower
-	}
+	rf.checkTerm(args.Term)
 	reply.Term = rf.currentTerm
 	reply.Success = false
 	if args.Term < rf.currentTerm {
@@ -134,13 +122,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.logger.Printf("Log entries: %v -> %v", oldLog, rf.log)
 	if args.LeaderCommit > rf.commitIndex {
 		// take the min of LeaderCommit and index of last new entry
-		oldCommitIndex := rf.commitIndex
-		rf.commitIndex = args.PrevLogIndex + len(args.Entries)
-		if rf.commitIndex > args.LeaderCommit {
-			rf.commitIndex = args.LeaderCommit
+		newCommitIndex := args.PrevLogIndex + len(args.Entries)
+		if newCommitIndex > args.LeaderCommit {
+			newCommitIndex = args.LeaderCommit
 		}
-		rf.applyCond.Broadcast()
-		rf.logger.Printf("Update commitIndex: %v -> %v", oldCommitIndex, rf.commitIndex)
+		rf.tryUpdateCommitIndex(newCommitIndex)
 	}
 	reply.Success = true
 }
