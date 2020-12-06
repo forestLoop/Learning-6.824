@@ -65,6 +65,7 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 		Term:    rf.currentTerm,
 		Command: command,
 	})
+	rf.persist()
 	index = len(rf.log) - 1
 	term = rf.currentTerm
 	rf.logger.Printf("A log entry is appended: term = %v, index = %v, command = %v", term, index, command)
@@ -132,14 +133,13 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	muteLoggerIfUnset(rf.logger, "debug")
 	rf.leaderCond = sync.NewCond(&rf.mu)
 	rf.applyCond = sync.NewCond(&rf.mu)
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
 	rf.resetElectionTimer()
-	// Your initialization code here (2A, 2B, 2C).
 	go rf.leaderElectionDaemon()
 	go rf.logReplicationDaemon()
 	go rf.commitIndexDaemon()
 	go rf.applyMessagesDaemon()
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 	return rf
 }
 
