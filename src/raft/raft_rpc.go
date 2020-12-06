@@ -43,6 +43,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = isLogUpToDate // grant vote if candidate's log is at least as up-to-date as receiver's log
 	if reply.VoteGranted {
 		rf.votedFor = args.CandidateID
+		rf.persist()
 		rf.resetElectionTimer()
 	}
 }
@@ -119,6 +120,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// otherwise, do nothing to this entry
 		}
 	}
+	rf.persist()
 	rf.logger.Printf("Log entries: %v -> %v", oldLog, rf.log)
 	if args.LeaderCommit > rf.commitIndex {
 		// take the min of LeaderCommit and index of last new entry

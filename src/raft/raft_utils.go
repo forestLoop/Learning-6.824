@@ -49,6 +49,7 @@ func (rf *Raft) checkTerm(term int) {
 		rf.currentTerm = term
 		rf.votedFor = -1 // reset votedFor as it's a new term
 		rf.state = Follower
+		rf.persist()
 	}
 }
 
