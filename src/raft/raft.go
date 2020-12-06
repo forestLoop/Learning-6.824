@@ -120,7 +120,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		applyCh:      applyCh,
 		// Persistent state on all servers
 		currentTerm: 0,
-		votedFor:    nil,
+		votedFor:    -1,
 		log:         []*LogEntry{{0, nil}}, // add one dummy log entry for simplicity in coding
 		// Volatile state on all servers
 		commitIndex: 0,

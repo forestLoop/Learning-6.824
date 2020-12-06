@@ -75,8 +75,8 @@ func (rf *Raft) leaderElectionDaemon() {
 		// should kick off leader election
 		rf.state = Candidate
 		rf.currentTerm++
-		rf.votedFor = &rf.me // vote for myself
-		rf.votes = 1         // count my own vote
+		rf.votedFor = rf.me // vote for myself
+		rf.votes = 1        // count my own vote
 		rf.logger.Printf("Kick off leader election: currentTerm = %v", rf.currentTerm)
 		rf.resetElectionTimer()
 		// send RequestVote RPCs to all other servers

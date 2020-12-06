@@ -64,7 +64,7 @@ type Raft struct {
 
 	// Persistent state on all servers
 	currentTerm int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
-	votedFor    *int        // candidate that received vote in current term or nil if none
+	votedFor    int         // candidate that received vote in current term or -1 if not voted
 	log         []*LogEntry // log entries on this server
 
 	// Volatile state on all servers

@@ -47,7 +47,7 @@ func (rf *Raft) checkTerm(term int) {
 	if term > rf.currentTerm {
 		rf.logger.Printf("Convert to follower: currentTerm = %v -> %v", rf.currentTerm, term)
 		rf.currentTerm = term
-		rf.votedFor = nil // reset votedFor as it's a new term
+		rf.votedFor = -1 // reset votedFor as it's a new term
 		rf.state = Follower
 	}
 }
