@@ -1,5 +1,11 @@
 package kvraft
 
+import (
+	"io/ioutil"
+	"log"
+	"os"
+)
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
@@ -30,4 +36,14 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+func muteLoggerIfUnset(logger *log.Logger, env string) {
+	if os.Getenv(env) == "" {
+		muteLogger(logger)
+	}
+}
+
+func muteLogger(logger *log.Logger) {
+	logger.SetOutput(ioutil.Discard)
 }
