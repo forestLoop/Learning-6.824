@@ -165,6 +165,7 @@ func (rf *Raft) applyMessagesDaemon() {
 				CommandValid: true,
 				Command:      rf.log[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
+				CommandTerm:  rf.log[rf.lastApplied].Term,
 			}
 			rf.applyCond.L.Unlock()
 			rf.logger.Printf("Apply message: msg = %v", msg)

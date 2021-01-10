@@ -29,6 +29,7 @@ type ApplyMsg struct {
 	CommandValid bool // true if the ApplyMsg contains a newly committed log entry
 	Command      interface{}
 	CommandIndex int // the index of this command in log
+	CommandTerm  int // the term of this command when first added
 }
 
 // State is the role of a Raft peer, must be one of follower, candidate and leader
