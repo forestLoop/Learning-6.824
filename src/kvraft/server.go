@@ -1,7 +1,9 @@
 package kvraft
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -20,9 +22,9 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Type  string
+	Key   string
+	Value string
 }
 
 type KVServer struct {
@@ -31,18 +33,69 @@ type KVServer struct {
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
+	logger  *log.Logger
+
+	database map[string]string
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
+	waitingCond map[string]*sync.Cond
+}
+
+func concat(index int, term int) string {
+	return fmt.Sprintf("%v+%v", index, term)
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	kv.logger.Printf("RPC request: %v", args)
+	defer kv.logger.Printf("RPC reply: %v", reply)
+	index, term, isLeader := kv.rf.Start(Op{
+		Type:  "Get",
+		Key:   args.Key,
+		Value: "",
+	})
+	reply.Err = OK
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		kv.logger.Printf("Sorry, I'm not a leader.")
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	cond := sync.NewCond(&kv.mu)
+	kv.waitingCond[concat(index, term)] = cond
+	kv.logger.Printf("Wait for applied messages: key = %v", concat(index, term))
+	cond.Wait()
+	kv.logger.Printf("I'm now awake: key = %v", concat(index, term))
+	// wait till this command is applied
+	reply.Value = kv.database[args.Key]
+	return
+
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	kv.logger.Printf("RPC request: %v", args)
+	defer kv.logger.Printf("RPC reply: %v", reply)
+	index, term, isLeader := kv.rf.Start(Op{
+		Type:  args.Op,
+		Key:   args.Key,
+		Value: args.Value,
+	})
+	reply.Err = OK
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		kv.logger.Printf("Sorry, I'm not a leader.")
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	cond := sync.NewCond(&kv.mu)
+	kv.waitingCond[concat(index, term)] = cond
+	kv.logger.Printf("Wait for applied messages: key = %v", concat(index, term))
+	cond.Wait()
+	kv.logger.Printf("I'm now awake: key = %v", concat(index, term))
+	// wait till this command is applied
+	return
 }
 
 //
@@ -66,6 +119,45 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
+func (kv *KVServer) applyCommandDaemon() {
+	for {
+		select {
+		case msg := <-kv.applyCh:
+			kv.logger.Printf("Get a message to apply: %v", msg)
+			if !msg.CommandValid {
+				continue
+			}
+			op, ok := msg.Command.(Op)
+			if !ok {
+				kv.logger.Printf("Invalid operation: %v", msg.Command)
+				continue
+			}
+			kv.logger.Printf("Valid operation: %v", op)
+			switch op.Type {
+			case "Get":
+				// nothing to do for Get here
+			case "Put":
+				kv.mu.Lock()
+				kv.database[op.Key] = op.Value
+				kv.mu.Unlock()
+			case "Append":
+				kv.mu.Lock()
+				kv.database[op.Key] += op.Value
+				kv.mu.Unlock()
+			default:
+				// unknown operation
+				kv.logger.Printf("Unknown operation type: %v", op.Type)
+			}
+			kv.mu.Lock()
+			if cond, ok := kv.waitingCond[concat(msg.CommandIndex, msg.CommandTerm)]; ok {
+				kv.logger.Printf("Wake up cond for %v", concat(msg.CommandIndex, msg.CommandTerm))
+				cond.Broadcast()
+			}
+			kv.mu.Unlock()
+		}
+	}
+}
+
 //
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -85,16 +177,19 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-
-	// You may need initialization code here.
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
-
+	applyCh := make(chan raft.ApplyMsg)
+	kv := &KVServer{
+		mu:           sync.Mutex{},
+		me:           me,
+		applyCh:      applyCh,
+		rf:           raft.Make(servers, me, persister, applyCh),
+		dead:         0,
+		logger:       log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
+		database:     make(map[string]string),
+		waitingCond:  make(map[string]*sync.Cond),
+		maxraftstate: maxraftstate,
+	}
+	muteLoggerIfUnset(kv.logger, "debug_server")
+	go kv.applyCommandDaemon()
 	return kv
 }
