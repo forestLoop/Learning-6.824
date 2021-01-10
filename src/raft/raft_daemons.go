@@ -159,11 +159,14 @@ func (rf *Raft) applyMessagesDaemon() {
 		// no need to hold mutex for r/w lastApplied as only this goroutine would r/w it
 		for rf.lastApplied < commitIndex {
 			rf.lastApplied++
+			// but it's necessary to hold mutex when reading rf.log
+			rf.applyCond.L.Lock()
 			msg := ApplyMsg{
 				CommandValid: true,
 				Command:      rf.log[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
 			}
+			rf.applyCond.L.Unlock()
 			rf.logger.Printf("Apply message: msg = %v", msg)
 			rf.applyCh <- msg
 			rf.logger.Printf("Applied: msg = %v", msg)
