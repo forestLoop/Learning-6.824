@@ -1,12 +1,13 @@
 package kvraft
 
 import (
-	"crypto/rand"
+	"fmt"
 	"log"
-	"math/big"
 	mathrand "math/rand"
 	"os"
+	"sync"
 
+	"github.com/google/uuid"
 	"github.com/keithnull/Learning-6.824/src/labrpc"
 )
 
@@ -14,21 +15,20 @@ type Clerk struct {
 	servers    []*labrpc.ClientEnd
 	lastLeader int // -1 for unknown
 	logger     *log.Logger
-	// You will have to modify this struct.
-}
-
-func nrand() int64 {
-	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return x
+	clerkID    string     // unique identifier for this clerk
+	commandSeq int        // monotonically increasing command sequence number
+	mu         sync.Mutex // for commandSeq only
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+	id := uuid.New().String()
 	ck := &Clerk{
 		servers:    servers,
 		lastLeader: -1,
-		logger:     log.New(os.Stdout, "[Client]", log.Ltime|log.Lmicroseconds),
+		logger:     log.New(os.Stdout, fmt.Sprintf("[Client %v]", id), log.Ltime|log.Lmicroseconds),
+		clerkID:    id,
+		commandSeq: 1,
+		mu:         sync.Mutex{},
 	}
 	muteLoggerIfUnset(ck.logger, "debug_clerk")
 	return ck
@@ -54,9 +54,14 @@ func (ck *Clerk) getLastLeader() int {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	ck.mu.Lock()
 	args := GetArgs{
-		Key: key,
+		Key:     key,
+		ClerkID: ck.clerkID,
+		Seq:     ck.commandSeq,
 	}
+	ck.commandSeq++
+	ck.mu.Unlock()
 	targetServer := ck.getLastLeader() - 1
 	for {
 		targetServer = (targetServer + 1) % len(ck.servers)
@@ -87,11 +92,16 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	ck.mu.Lock()
 	args := PutAppendArgs{
-		Key:   key,
-		Value: value,
-		Op:    op,
+		Key:     key,
+		Value:   value,
+		Op:      op,
+		ClerkID: ck.clerkID,
+		Seq:     ck.commandSeq,
 	}
+	ck.commandSeq++
+	ck.mu.Unlock()
 	targetServer := ck.getLastLeader() - 1
 	for {
 		targetServer = (targetServer + 1) % len(ck.servers)

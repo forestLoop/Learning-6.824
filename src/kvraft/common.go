@@ -7,21 +7,22 @@ import (
 )
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK                  = "OK"
+	ErrNoKey            = "ErrNoKey"
+	ErrWrongLeader      = "ErrWrongLeader"
+	ErrFailedToApply    = "ErrFailedToApply"
+	ErrDuplicateRequest = "ErrDuplicateRequest"
 )
 
 type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Key     string
+	Value   string
+	Op      string // "Put" or "Append"
+	ClerkID string // clerk's unique id
+	Seq     int    // for each clerk, its monotonically increasing command sequence number
 }
 
 type PutAppendReply struct {
@@ -29,8 +30,9 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	Key     string
+	ClerkID string // clerk's unique id
+	Seq     int    // for each clerk, its monotonically increasing command sequence number
 }
 
 type GetReply struct {
