@@ -12,19 +12,16 @@ import (
 	"github.com/keithnull/Learning-6.824/src/raft"
 )
 
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
-
 type Op struct {
 	Type  string
 	Key   string
 	Value string
+}
+
+type waitingEntry struct {
+	term    int
+	cond    *sync.Cond
+	success bool
 }
 
 type KVServer struct {
@@ -39,11 +36,7 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	waitingCond map[string]*sync.Cond
-}
-
-func concat(index int, term int) string {
-	return fmt.Sprintf("%v+%v", index, term)
+	waitingRequest map[int]*waitingEntry
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -63,14 +56,22 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	cond := sync.NewCond(&kv.mu)
-	kv.waitingCond[concat(index, term)] = cond
-	kv.logger.Printf("Wait for applied messages: key = %v", concat(index, term))
-	cond.Wait()
-	kv.logger.Printf("I'm now awake: key = %v", concat(index, term))
+	kv.waitingRequest[index] = &waitingEntry{
+		term:    term,
+		cond:    cond,
+		success: false,
+	}
+	defer delete(kv.waitingRequest, index) // remember to free memory space!
+	kv.logger.Printf("Wait for applied messages: key = %v", index)
 	// wait till this command is applied
+	cond.Wait()
+	kv.logger.Printf("I'm now awake: key = %v", index)
+	if !kv.waitingRequest[index].success {
+		reply.Err = ErrFailedToApply
+		kv.logger.Printf("Failed to apply")
+		return
+	}
 	reply.Value = kv.database[args.Key]
-	return
-
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -90,12 +91,21 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	cond := sync.NewCond(&kv.mu)
-	kv.waitingCond[concat(index, term)] = cond
-	kv.logger.Printf("Wait for applied messages: key = %v", concat(index, term))
-	cond.Wait()
-	kv.logger.Printf("I'm now awake: key = %v", concat(index, term))
+	kv.waitingRequest[index] = &waitingEntry{
+		term:    term,
+		cond:    cond,
+		success: false,
+	}
+	defer delete(kv.waitingRequest, index) // remember to free memory space!
+	kv.logger.Printf("Wait for applied messages: key = %v", index)
 	// wait till this command is applied
-	return
+	cond.Wait()
+	kv.logger.Printf("I'm now awake: key = %v", index)
+	if !kv.waitingRequest[index].success {
+		reply.Err = ErrFailedToApply
+		kv.logger.Printf("Failed to apply")
+		return
+	}
 }
 
 //
@@ -149,9 +159,11 @@ func (kv *KVServer) applyCommandDaemon() {
 				kv.logger.Printf("Unknown operation type: %v", op.Type)
 			}
 			kv.mu.Lock()
-			if cond, ok := kv.waitingCond[concat(msg.CommandIndex, msg.CommandTerm)]; ok {
-				kv.logger.Printf("Wake up cond for %v", concat(msg.CommandIndex, msg.CommandTerm))
-				cond.Broadcast()
+			if we, ok := kv.waitingRequest[msg.CommandIndex]; ok {
+				kv.logger.Printf("Wake up cond for %v: %v", msg.CommandIndex, we)
+				// test if the terms match
+				we.success = (msg.CommandTerm == we.term)
+				we.cond.Broadcast()
 			}
 			kv.mu.Unlock()
 		}
@@ -179,15 +191,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	applyCh := make(chan raft.ApplyMsg)
 	kv := &KVServer{
-		mu:           sync.Mutex{},
-		me:           me,
-		applyCh:      applyCh,
-		rf:           raft.Make(servers, me, persister, applyCh),
-		dead:         0,
-		logger:       log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
-		database:     make(map[string]string),
-		waitingCond:  make(map[string]*sync.Cond),
-		maxraftstate: maxraftstate,
+		mu:             sync.Mutex{},
+		me:             me,
+		applyCh:        applyCh,
+		rf:             raft.Make(servers, me, persister, applyCh),
+		dead:           0,
+		logger:         log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
+		database:       make(map[string]string),
+		waitingRequest: make(map[int]*waitingEntry),
+		maxraftstate:   maxraftstate,
 	}
 	muteLoggerIfUnset(kv.logger, "debug_server")
 	go kv.applyCommandDaemon()
