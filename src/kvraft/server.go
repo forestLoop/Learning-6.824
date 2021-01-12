@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/keithnull/Learning-6.824/src/labgob"
@@ -32,7 +31,7 @@ type KVServer struct {
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	quitCh  chan struct{}
 	logger  *log.Logger
 
 	// application states
@@ -127,19 +126,18 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // to suppress debug output from a Kill()ed instance.
 //
 func (kv *KVServer) Kill() {
-	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
-}
-
-func (kv *KVServer) killed() bool {
-	z := atomic.LoadInt32(&kv.dead)
-	return z == 1
+	// put two items as there are two daemons
+	kv.quitCh <- struct{}{}
+	kv.quitCh <- struct{}{}
 }
 
 func (kv *KVServer) applyCommandDaemon() {
 	for {
 		select {
+		case <-kv.quitCh:
+			kv.logger.Printf("applyCommandDaemon stops.")
+			return
 		case msg := <-kv.applyCh:
 			kv.logger.Printf("Get a message to apply: %v", msg)
 			if !msg.CommandValid {
@@ -153,9 +151,10 @@ func (kv *KVServer) applyCommandDaemon() {
 			kv.logger.Printf("Valid operation: %v", op)
 			kv.mu.Lock()
 			if prevSeq, ok := kv.clerkSeq[op.ClerkID]; ok && prevSeq >= op.CommandSeq {
+				// do nothing for duplicated requests
 				kv.logger.Printf("Duplicate request ignored: prevSeq = %v, op.CommandSeq = %v, op = %v", prevSeq, op.CommandSeq, op)
 			} else {
-				kv.clerkSeq[op.ClerkID] = op.CommandSeq // for duplicate elimination
+				kv.clerkSeq[op.ClerkID] = op.CommandSeq // record the highest sequence number for each clerk
 				switch op.Type {
 				case "Get":
 					// nothing to do here
@@ -172,6 +171,7 @@ func (kv *KVServer) applyCommandDaemon() {
 					kv.logger.Fatalf("Unknown operation type: %v", op.Type)
 				}
 			}
+			// wake up the pending request, if any
 			if we, ok := kv.waitingRequest[msg.CommandIndex]; ok {
 				kv.logger.Printf("Wake up cond for %v: %v", msg.CommandIndex, we)
 				// test if the terms match
@@ -183,20 +183,31 @@ func (kv *KVServer) applyCommandDaemon() {
 	}
 }
 
+// checkLeadershipDaemon checks whether this Raft instance's leadership has changed
+// since some pending request by checking whether its term has changed
+// If changed, then wake up such pending requests and let them fail to avoid indefinite waiting
 func (kv *KVServer) checkLeadershipDaemon() {
+	ticker := time.NewTicker(100 * time.Millisecond)
 	for {
-		time.Sleep(100 * time.Millisecond)
-		term, _ := kv.rf.GetState()
-		kv.mu.Lock()
-		for k, v := range kv.waitingRequest {
-			if term != v.term { // this pending request will never proceed
-				v.success = false
-				kv.logger.Printf("Leadership changed, wake up: key = %v, term %v -> %v", k, v.term, term)
-				v.cond.Broadcast()
+		select {
+		case <-kv.quitCh:
+			kv.logger.Printf("checkLeadershipDaemon stops.")
+			return
+		case <-ticker.C:
+			term, _ := kv.rf.GetState()
+			kv.mu.Lock()
+			for k, v := range kv.waitingRequest {
+				if term != v.term {
+					// this pending request will never proceed, so wake it up and let it fail
+					v.success = false
+					kv.logger.Printf("Leadership changed, wake up and face the brutal reality: key = %v, term %v -> %v", k, v.term, term)
+					v.cond.Broadcast()
+				}
 			}
+			kv.mu.Unlock()
 		}
-		kv.mu.Unlock()
 	}
+
 }
 
 //
@@ -224,7 +235,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:             me,
 		applyCh:        applyCh,
 		rf:             raft.Make(servers, me, persister, applyCh),
-		dead:           0,
+		quitCh:         make(chan struct{}, 2),
 		logger:         log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
 		database:       make(map[string]string),
 		clerkSeq:       make(map[string]int),

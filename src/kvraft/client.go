@@ -3,9 +3,11 @@ package kvraft
 import (
 	"fmt"
 	"log"
-	mathrand "math/rand"
+	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/keithnull/Learning-6.824/src/labrpc"
@@ -13,7 +15,7 @@ import (
 
 type Clerk struct {
 	servers    []*labrpc.ClientEnd
-	lastLeader int // -1 for unknown
+	leaderID   int64 // remember the current leader
 	logger     *log.Logger
 	clerkID    string     // unique identifier for this clerk
 	commandSeq int        // monotonically increasing command sequence number
@@ -24,7 +26,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	id := uuid.New().String()
 	ck := &Clerk{
 		servers:    servers,
-		lastLeader: -1,
+		leaderID:   0,
 		logger:     log.New(os.Stdout, fmt.Sprintf("[Client %v]", id), log.Ltime|log.Lmicroseconds),
 		clerkID:    id,
 		commandSeq: 1,
@@ -34,11 +36,15 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
-func (ck *Clerk) getLastLeader() int {
-	if ck.lastLeader != -1 {
-		return ck.lastLeader
-	}
-	return mathrand.Int() % len(ck.servers)
+func (ck *Clerk) getLeader() int64 {
+	return atomic.LoadInt64(&ck.leaderID)
+}
+
+func (ck *Clerk) changeLeader() {
+	bias := rand.Int63n(int64(len(ck.servers)))
+	oldLeader := ck.getLeader()
+	newLeader := (oldLeader + bias) % int64(len(ck.servers))
+	atomic.StoreInt64(&ck.leaderID, newLeader)
 }
 
 //
@@ -62,22 +68,23 @@ func (ck *Clerk) Get(key string) string {
 	}
 	ck.commandSeq++
 	ck.mu.Unlock()
-	targetServer := ck.getLastLeader() - 1
 	for {
-		targetServer = (targetServer + 1) % len(ck.servers)
+		targetServer := ck.getLeader()
 		ck.logger.Printf("Try to contact server %v for Get: args = %v", targetServer, args)
 		reply := GetReply{}
 		ok := ck.servers[targetServer].Call("KVServer.Get", &args, &reply)
+		if ok && reply.Err == OK { // success
+			return reply.Value
+		}
+		// ready to retry
 		if !ok {
 			ck.logger.Printf("Server %v didn't respond for Get", targetServer)
-			continue
 		}
 		if reply.Err != OK {
 			ck.logger.Printf("Server %v responded with Error %v for Get", targetServer, reply.Err)
-			continue
 		}
-		ck.lastLeader = targetServer
-		return reply.Value
+		ck.changeLeader()
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -102,22 +109,23 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 	ck.commandSeq++
 	ck.mu.Unlock()
-	targetServer := ck.getLastLeader() - 1
 	for {
-		targetServer = (targetServer + 1) % len(ck.servers)
+		targetServer := ck.getLeader()
 		ck.logger.Printf("Try to contact server %v for PutAppend: args = %v", targetServer, args)
 		reply := PutAppendReply{}
 		ok := ck.servers[targetServer].Call("KVServer.PutAppend", &args, &reply)
+		if ok && reply.Err == OK { // success
+			return
+		}
+		// ready to retry
 		if !ok {
 			ck.logger.Printf("Server %v didn't respond for PutAppend", targetServer)
-			continue
 		}
 		if reply.Err != OK {
 			ck.logger.Printf("Server %v responded with Error %v for PutAppend", targetServer, reply.Err)
-			continue
 		}
-		ck.lastLeader = targetServer
-		return
+		ck.changeLeader()
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
