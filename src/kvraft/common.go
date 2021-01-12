@@ -7,11 +7,10 @@ import (
 )
 
 const (
-	OK                  = "OK"
-	ErrNoKey            = "ErrNoKey"
-	ErrWrongLeader      = "ErrWrongLeader"
-	ErrFailedToApply    = "ErrFailedToApply"
-	ErrDuplicateRequest = "ErrDuplicateRequest"
+	OK               = "OK"
+	ErrNoKey         = "ErrNoKey"
+	ErrWrongLeader   = "ErrWrongLeader"
+	ErrFailedToApply = "ErrFailedToApply"
 )
 
 type Err string

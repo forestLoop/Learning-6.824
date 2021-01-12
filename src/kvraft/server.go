@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/keithnull/Learning-6.824/src/labgob"
 	"github.com/keithnull/Learning-6.824/src/labrpc"
@@ -13,9 +14,11 @@ import (
 )
 
 type Op struct {
-	Type  string
-	Key   string
-	Value string
+	Type       string
+	Key        string
+	Value      string
+	ClerkID    string
+	CommandSeq int
 }
 
 type waitingEntry struct {
@@ -32,20 +35,24 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 	logger  *log.Logger
 
-	database map[string]string
+	// application states
+	database map[string]string // K/V database
+	clerkSeq map[string]int    // for duplicate elimination, map[clerkID]commandSeq
 
 	maxraftstate int // snapshot if log grows this big
 
-	waitingRequest map[int]*waitingEntry
+	waitingRequest map[int]*waitingEntry // for each request, after submitting to Raft with `Start()`, add an entry to this map and wait to be waken up
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.logger.Printf("RPC request: %v", args)
 	defer kv.logger.Printf("RPC reply: %v", reply)
 	index, term, isLeader := kv.rf.Start(Op{
-		Type:  "Get",
-		Key:   args.Key,
-		Value: "",
+		Type:       "Get",
+		Key:        args.Key,
+		Value:      "",
+		ClerkID:    args.ClerkID,
+		CommandSeq: args.Seq,
 	})
 	reply.Err = OK
 	if !isLeader {
@@ -78,9 +85,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.logger.Printf("RPC request: %v", args)
 	defer kv.logger.Printf("RPC reply: %v", reply)
 	index, term, isLeader := kv.rf.Start(Op{
-		Type:  args.Op,
-		Key:   args.Key,
-		Value: args.Value,
+		Type:       args.Op,
+		Key:        args.Key,
+		Value:      args.Value,
+		ClerkID:    args.ClerkID,
+		CommandSeq: args.Seq,
 	})
 	reply.Err = OK
 	if !isLeader {
@@ -104,7 +113,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !kv.waitingRequest[index].success {
 		reply.Err = ErrFailedToApply
 		kv.logger.Printf("Failed to apply")
-		return
 	}
 }
 
@@ -139,26 +147,31 @@ func (kv *KVServer) applyCommandDaemon() {
 			}
 			op, ok := msg.Command.(Op)
 			if !ok {
-				kv.logger.Printf("Invalid operation: %v", msg.Command)
+				kv.logger.Fatalf("Invalid operation: %v", msg.Command)
 				continue
 			}
 			kv.logger.Printf("Valid operation: %v", op)
-			switch op.Type {
-			case "Get":
-				// nothing to do for Get here
-			case "Put":
-				kv.mu.Lock()
-				kv.database[op.Key] = op.Value
-				kv.mu.Unlock()
-			case "Append":
-				kv.mu.Lock()
-				kv.database[op.Key] += op.Value
-				kv.mu.Unlock()
-			default:
-				// unknown operation
-				kv.logger.Printf("Unknown operation type: %v", op.Type)
-			}
 			kv.mu.Lock()
+			if prevSeq, ok := kv.clerkSeq[op.ClerkID]; ok && prevSeq >= op.CommandSeq {
+				kv.logger.Printf("Duplicate request ignored: prevSeq = %v, op.CommandSeq = %v, op = %v", prevSeq, op.CommandSeq, op)
+			} else {
+				kv.clerkSeq[op.ClerkID] = op.CommandSeq // for duplicate elimination
+				switch op.Type {
+				case "Get":
+					// nothing to do here
+				case "Put":
+					kv.database[op.Key] = op.Value
+				case "Append":
+					oldValue, ok := kv.database[op.Key]
+					if !ok { // append to a non-existent entry
+						oldValue = ""
+					}
+					kv.database[op.Key] = oldValue + op.Value
+				default:
+					// unknown operation
+					kv.logger.Fatalf("Unknown operation type: %v", op.Type)
+				}
+			}
 			if we, ok := kv.waitingRequest[msg.CommandIndex]; ok {
 				kv.logger.Printf("Wake up cond for %v: %v", msg.CommandIndex, we)
 				// test if the terms match
@@ -167,6 +180,22 @@ func (kv *KVServer) applyCommandDaemon() {
 			}
 			kv.mu.Unlock()
 		}
+	}
+}
+
+func (kv *KVServer) checkLeadershipDaemon() {
+	for {
+		time.Sleep(100 * time.Millisecond)
+		term, _ := kv.rf.GetState()
+		kv.mu.Lock()
+		for k, v := range kv.waitingRequest {
+			if term != v.term { // this pending request will never proceed
+				v.success = false
+				kv.logger.Printf("Leadership changed, wake up: key = %v, term %v -> %v", k, v.term, term)
+				v.cond.Broadcast()
+			}
+		}
+		kv.mu.Unlock()
 	}
 }
 
@@ -198,10 +227,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		dead:           0,
 		logger:         log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
 		database:       make(map[string]string),
+		clerkSeq:       make(map[string]int),
 		waitingRequest: make(map[int]*waitingEntry),
 		maxraftstate:   maxraftstate,
 	}
 	muteLoggerIfUnset(kv.logger, "debug_server")
 	go kv.applyCommandDaemon()
+	go kv.checkLeadershipDaemon()
 	return kv
 }
