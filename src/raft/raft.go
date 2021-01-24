@@ -94,6 +94,13 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) TakeSnapshot(snapshot []byte, lastIncludedIndex int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.discardEntriesBefore(lastIncludedIndex)
+	rf.persistWithSnapshot(snapshot)
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this

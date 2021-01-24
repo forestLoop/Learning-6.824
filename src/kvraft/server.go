@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -38,7 +39,10 @@ type KVServer struct {
 	database map[string]string // K/V database
 	clerkSeq map[string]int    // for duplicate elimination, map[clerkID]commandSeq
 
-	maxraftstate int // snapshot if log grows this big
+	// snapshot related
+	maxraftstate int             // snapshot if log grows this big
+	persister    *raft.Persister // the same persister it passes to Raft
+	lastApplied  int
 
 	waitingRequest map[int]*waitingEntry // for each request, after submitting to Raft with `Start()`, add an entry to this map and wait to be waken up
 }
@@ -127,7 +131,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 //
 func (kv *KVServer) Kill() {
 	kv.rf.Kill()
-	// put two items as there are two daemons
+	// put 3 items as there are 3 daemons
+	kv.quitCh <- struct{}{}
 	kv.quitCh <- struct{}{}
 	kv.quitCh <- struct{}{}
 }
@@ -150,6 +155,7 @@ func (kv *KVServer) applyCommandDaemon() {
 			}
 			kv.logger.Printf("Valid operation: %v", op)
 			kv.mu.Lock()
+			kv.lastApplied = msg.CommandIndex
 			if prevSeq, ok := kv.clerkSeq[op.ClerkID]; ok && prevSeq >= op.CommandSeq {
 				// do nothing for duplicated requests
 				kv.logger.Printf("Duplicate request ignored: prevSeq = %v, op.CommandSeq = %v, op = %v", prevSeq, op.CommandSeq, op)
@@ -207,7 +213,32 @@ func (kv *KVServer) checkLeadershipDaemon() {
 			kv.mu.Unlock()
 		}
 	}
+}
 
+func (kv *KVServer) createSnapshotDaemon() {
+	ticker := time.NewTicker(1000 * time.Millisecond)
+	for {
+		select {
+		case <-kv.quitCh:
+			kv.logger.Printf("createSnapshotDaemon stops.")
+			return
+		case <-ticker.C:
+			size := kv.persister.RaftStateSize()
+			if kv.maxraftstate > 0 && size > kv.maxraftstate {
+				kv.logger.Printf("Need to create a snapshot: size = %v, maxraftstate = %v", size, kv.maxraftstate)
+				kv.mu.Lock() // acquire lock as we need to read app's states
+				w := new(bytes.Buffer)
+				e := labgob.NewEncoder(w)
+				_ = e.Encode(kv.database)
+				_ = e.Encode(kv.clerkSeq)
+				snapshot := w.Bytes()
+				lastIncludedIndex := kv.lastApplied
+				kv.mu.Unlock() // release lock before calling raft
+				kv.logger.Printf("Snapshot created, hand it to Raft now")
+				kv.rf.TakeSnapshot(snapshot, lastIncludedIndex)
+			}
+		}
+	}
 }
 
 //
@@ -235,15 +266,18 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		me:             me,
 		applyCh:        applyCh,
 		rf:             raft.Make(servers, me, persister, applyCh),
-		quitCh:         make(chan struct{}, 2),
+		quitCh:         make(chan struct{}, 3),
 		logger:         log.New(os.Stdout, fmt.Sprintf("[Server %v]", me), log.Ltime|log.Lmicroseconds),
 		database:       make(map[string]string),
 		clerkSeq:       make(map[string]int),
 		waitingRequest: make(map[int]*waitingEntry),
 		maxraftstate:   maxraftstate,
+		persister:      persister,
+		lastApplied:    -1,
 	}
 	muteLoggerIfUnset(kv.logger, "debug_server")
 	go kv.applyCommandDaemon()
 	go kv.checkLeadershipDaemon()
+	go kv.createSnapshotDaemon()
 	return kv
 }
