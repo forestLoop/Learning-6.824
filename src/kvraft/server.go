@@ -145,7 +145,17 @@ func (kv *KVServer) applyCommandDaemon() {
 			return
 		case msg := <-kv.applyCh:
 			kv.logger.Printf("Get a message to apply: %v", msg)
-			if !msg.CommandValid {
+			if !msg.CommandValid { // get a snapshot
+				kv.logger.Printf("Get a snapshot to apply: %v", msg)
+				snapshot, ok := msg.Command.([]byte)
+				if !ok {
+					kv.logger.Fatalf("Invalid snapshot message: %v", msg)
+				} else {
+					kv.mu.Lock()
+					kv.decodeSnapshot(snapshot)
+					kv.mu.Unlock()
+					kv.logger.Print("Snapshot applied")
+				}
 				continue
 			}
 			op, ok := msg.Command.(Op)
@@ -215,6 +225,28 @@ func (kv *KVServer) checkLeadershipDaemon() {
 	}
 }
 
+func (kv *KVServer) decodeSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 { // skip empty snapshot
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	if err := d.Decode(&kv.database); err != nil {
+		kv.logger.Fatal("Failed to read database:", err)
+	}
+	if err := d.Decode(&kv.clerkSeq); err != nil {
+		kv.logger.Fatal("Failed to read clerkSeq:", err)
+	}
+}
+
+func (kv *KVServer) encodeSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	_ = e.Encode(kv.database)
+	_ = e.Encode(kv.clerkSeq)
+	return w.Bytes()
+}
+
 func (kv *KVServer) createSnapshotDaemon() {
 	ticker := time.NewTicker(1000 * time.Millisecond)
 	for {
@@ -227,11 +259,7 @@ func (kv *KVServer) createSnapshotDaemon() {
 			if kv.maxraftstate > 0 && size > kv.maxraftstate {
 				kv.logger.Printf("Need to create a snapshot: size = %v, maxraftstate = %v", size, kv.maxraftstate)
 				kv.mu.Lock() // acquire lock as we need to read app's states
-				w := new(bytes.Buffer)
-				e := labgob.NewEncoder(w)
-				_ = e.Encode(kv.database)
-				_ = e.Encode(kv.clerkSeq)
-				snapshot := w.Bytes()
+				snapshot := kv.encodeSnapshot()
 				lastIncludedIndex := kv.lastApplied
 				kv.mu.Unlock() // release lock before calling raft
 				kv.logger.Printf("Snapshot created, hand it to Raft now")
@@ -260,7 +288,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	applyCh := make(chan raft.ApplyMsg)
+	applyCh := make(chan raft.ApplyMsg, 1) // set buffer size to 1 for initialization with snapshot
 	kv := &KVServer{
 		mu:             sync.Mutex{},
 		me:             me,
