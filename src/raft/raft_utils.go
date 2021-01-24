@@ -67,22 +67,22 @@ func muteLogger(logger *log.Logger) {
 // WARNING: must hold mutex before calling all following functions!
 
 func (rf *Raft) getLastIndex() int {
-	return rf.lastIndexInSnapshot + len(rf.log)
+	return rf.lastIncludedIndex + len(rf.log)
 }
 
 func (rf *Raft) getLastTerm() int {
 	if len(rf.log) == 0 {
-		return rf.lastTermInSnapshot
+		return rf.lastIncludedTerm
 	}
 	return rf.log[len(rf.log)-1].Term
 }
 
 func (rf *Raft) index2pos(index int) int {
-	return index - rf.lastIndexInSnapshot - 1
+	return index - rf.lastIncludedIndex - 1
 }
 
 func (rf *Raft) pos2index(pos int) int {
-	return pos + 1 + rf.lastIndexInSnapshot
+	return pos + 1 + rf.lastIncludedIndex
 }
 
 func (rf *Raft) isValidIndex(index int) bool {
