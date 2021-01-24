@@ -105,6 +105,7 @@ func (rf *Raft) initSnapshot(snapshot []byte) {
 	rf.applyCh <- ApplyMsg{
 		CommandValid: false,
 		Command:      snapshot,
+		CommandIndex: rf.lastIncludedIndex,
 	}
 }
 
