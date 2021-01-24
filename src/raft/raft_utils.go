@@ -62,3 +62,34 @@ func muteLoggerIfUnset(logger *log.Logger, env string) {
 func muteLogger(logger *log.Logger) {
 	logger.SetOutput(ioutil.Discard)
 }
+
+// --- Log Compaction Related Utilities ---
+// WARNING: must hold mutex before calling all following functions!
+
+func (rf *Raft) getLastIndex() int {
+	return rf.lastIndexInSnapshot + len(rf.log)
+}
+
+func (rf *Raft) getLastTerm() int {
+	if len(rf.log) == 0 {
+		return rf.lastTermInSnapshot
+	}
+	return rf.log[len(rf.log)-1].Term
+}
+
+func (rf *Raft) index2pos(index int) int {
+	return index - rf.lastIndexInSnapshot - 1
+}
+
+func (rf *Raft) pos2index(pos int) int {
+	return pos + 1 + rf.lastIndexInSnapshot
+}
+
+func (rf *Raft) isValidIndex(index int) bool {
+	pos := rf.index2pos(index)
+	return 0 <= pos && pos < len(rf.log)
+}
+
+func (rf *Raft) getEntry(index int) *LogEntry {
+	return rf.log[rf.index2pos(index)]
+}

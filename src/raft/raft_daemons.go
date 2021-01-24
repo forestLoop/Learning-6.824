@@ -20,13 +20,17 @@ func (rf *Raft) logReplicationDaemon() {
 				continue
 			}
 			prevLogIndex := rf.nextIndex[i] - 1
+			prevLogPos := rf.index2pos(prevLogIndex)
+			if prevLogPos < 0 {
+				rf.logger.Fatal("TODO: send snapshot instead")
+			}
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderID:     rf.me,
 				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  rf.log[prevLogIndex].Term,
+				PrevLogTerm:  rf.log[prevLogPos].Term,
 				LeaderCommit: rf.commitIndex,
-				Entries:      rf.log[prevLogIndex+1:],
+				Entries:      rf.log[prevLogPos+1:],
 			}
 			go func(server int, args AppendEntriesArgs) {
 				rf.logger.Printf("Send AppendEntries RPC to peer %v: args = %v", server, args)
@@ -84,8 +88,8 @@ func (rf *Raft) leaderElectionDaemon() {
 		args := RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CandidateID:  rf.me,
-			LastLogIndex: len(rf.log) - 1,
-			LastLogTerm:  rf.log[len(rf.log)-1].Term,
+			LastLogIndex: rf.getLastIndex(),
+			LastLogTerm:  rf.getLastTerm(),
 		}
 		rf.logger.Printf("Ready to send RequestVote RPCs to all other servers: args = %v", args)
 		for i := 0; i < len(rf.peers); i++ {
@@ -136,7 +140,7 @@ func (rf *Raft) commitIndexDaemon() {
 		sortedMatchIndex := append([]int(nil), rf.matchIndex...)
 		sort.Ints(sortedMatchIndex)
 		newCommitIndex := sortedMatchIndex[len(rf.peers)/2+1]
-		for newCommitIndex > rf.commitIndex && rf.log[newCommitIndex].Term != rf.currentTerm {
+		for newCommitIndex > rf.commitIndex && rf.log[rf.index2pos(newCommitIndex)].Term != rf.currentTerm {
 			newCommitIndex--
 		}
 		rf.tryUpdateCommitIndex(newCommitIndex)
@@ -161,11 +165,12 @@ func (rf *Raft) applyMessagesDaemon() {
 			rf.lastApplied++
 			// but it's necessary to hold mutex when reading rf.log
 			rf.applyCond.L.Lock()
+			pos := rf.index2pos(rf.lastApplied)
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log[rf.lastApplied].Command,
+				Command:      rf.log[pos].Command,
 				CommandIndex: rf.lastApplied,
-				CommandTerm:  rf.log[rf.lastApplied].Term,
+				CommandTerm:  rf.log[pos].Term,
 			}
 			rf.applyCond.L.Unlock()
 			rf.logger.Printf("Apply message: msg = %v", msg)
