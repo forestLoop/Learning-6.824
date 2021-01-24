@@ -64,11 +64,11 @@ type Raft struct {
 	leaderCond   *sync.Cond          // condition variable to notify the state conversion to leader
 
 	// Persistent state on all servers
-	currentTerm         int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
-	votedFor            int         // candidate that received vote in current term or -1 if not voted
-	log                 []*LogEntry // log entries on this server
-	lastTermInSnapshot  int         // term of the last log entry in snapshot
-	lastIndexInSnapshot int         // index of the last log entry in snapshot
+	currentTerm       int         // latest term this peer has seen (initialized to 0 on first boot and increases monotonically)
+	votedFor          int         // candidate that received vote in current term or -1 if not voted
+	log               []*LogEntry // log entries on this server
+	lastIncludedTerm  int         // term of the last log entry in snapshot
+	lastIncludedIndex int         // index of the last log entry in snapshot
 
 	// Volatile state on all servers
 	commitIndex int // index of highest log entry known to be commited (initialized to 0 and increases monotonically)
