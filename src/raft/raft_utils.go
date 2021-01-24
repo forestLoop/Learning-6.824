@@ -93,3 +93,26 @@ func (rf *Raft) isValidIndex(index int) bool {
 func (rf *Raft) getEntry(index int) *LogEntry {
 	return rf.log[rf.index2pos(index)]
 }
+
+// discardEntriesBefore discards all log entries before `index` (inclusive)
+// It's expected that rf.lastIncludedIndex < index <= rf.lastApplied
+func (rf *Raft) discardEntriesBefore(index int) {
+	rf.logger.Printf("Start to discard entries: index = %v, lastIncludedIndex = %v", index, rf.lastIncludedIndex)
+	if index > rf.getLastIndex() { // sanity check: you can at most discard all entries
+		index = rf.getLastIndex()
+	}
+	if index <= rf.lastIncludedIndex {
+		rf.logger.Printf("No need to discard entries")
+	} else if index > rf.lastApplied {
+		rf.logger.Fatalf("You should not discard unapplied entries: index = %v, rf.lastApplied = %v", index, rf.lastApplied)
+	} else {
+		// set raft status correctly
+		rf.lastIncludedTerm = rf.getEntry(index).Term
+		rf.lastIncludedIndex = index
+		// do the truncation actually
+		oldLog := rf.log
+		rf.log = rf.log[rf.index2pos(index)+1:]
+		rf.logger.Printf("Entries discarded: %v -> %v", oldLog, rf.log)
+		// no need to persist here as the caller will handle it
+	}
+}
