@@ -101,6 +101,13 @@ func (rf *Raft) TakeSnapshot(snapshot []byte, lastIncludedIndex int) {
 	rf.persistWithSnapshot(snapshot)
 }
 
+func (rf *Raft) initSnapshot(snapshot []byte) {
+	rf.applyCh <- ApplyMsg{
+		CommandValid: false,
+		Command:      snapshot,
+	}
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -144,6 +151,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.applyCond = sync.NewCond(&rf.mu)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.initSnapshot(persister.ReadSnapshot())
 	rf.resetElectionTimer()
 	go rf.leaderElectionDaemon()
 	go rf.logReplicationDaemon()
