@@ -153,6 +153,7 @@ func (kv *KVServer) applyCommandDaemon() {
 				} else {
 					kv.mu.Lock()
 					kv.decodeSnapshot(snapshot)
+					kv.lastApplied = msg.CommandIndex
 					kv.mu.Unlock()
 					kv.logger.Print("Snapshot applied")
 				}
