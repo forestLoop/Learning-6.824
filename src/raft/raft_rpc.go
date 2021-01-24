@@ -36,9 +36,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	// 1. receiver's last log term is older than candidate's last log term
-	isLogUpToDate := rf.log[len(rf.log)-1].Term < args.LastLogTerm
+	isLogUpToDate := rf.getLastTerm() < args.LastLogTerm
 	// 2. receiver's last log term is the same as candidate's last log term, but its log is shorter
-	isLogUpToDate = isLogUpToDate || (rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log) <= args.LastLogIndex+1)
+	isLogUpToDate = isLogUpToDate || (rf.getLastTerm() == args.LastLogTerm && rf.getLastIndex() <= args.LastLogIndex)
 	rf.logger.Printf("Candidate's log is at least as up-to-date as my log? %v", isLogUpToDate)
 	reply.VoteGranted = isLogUpToDate // grant vote if candidate's log is at least as up-to-date as receiver's log
 	if reply.VoteGranted {
@@ -84,37 +84,41 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// till now, we are sure this RPC is from the current leader
 	rf.resetElectionTimer()
 	// reply false if log doesn’t contain an entry at PrevLogIndex whose term matches PrevLogTerm
-	matched := (0 <= args.PrevLogIndex && args.PrevLogIndex < len(rf.log) && rf.log[args.PrevLogIndex].Term == args.PrevLogTerm)
+	matched := (rf.isValidIndex(args.PrevLogIndex) && rf.getEntry(args.PrevLogIndex).Term == args.PrevLogTerm)
 	if !matched {
 		var entry *LogEntry = nil
-		if args.PrevLogIndex < 0 { // would this be possible?
-			reply.ConflictingTerm = 0
-			reply.FirstIndex = 0
-			rf.logger.Fatalf("Oops: PrevLogIndex = %v, PrevLogTerm = %v, log = %v", args.PrevLogIndex, args.PrevLogTerm, rf.log)
-		} else if args.PrevLogIndex >= len(rf.log) {
+		pos := rf.index2pos(args.PrevLogIndex)
+		if pos >= len(rf.log) { // index out of range
 			reply.ConflictingTerm = -1
-			reply.FirstIndex = len(rf.log)
-		} else {
-			entry = rf.log[args.PrevLogIndex]
+			reply.FirstIndex = rf.getLastIndex() + 1
+		} else if pos < 0 { // index is inside the snapshot
+			reply.ConflictingTerm = -1
+			reply.FirstIndex = 1 // require an InstallSnapshot
+		} else { // simply mismatch
+			entry = rf.log[pos]
 			reply.ConflictingTerm = entry.Term
-			reply.FirstIndex = args.PrevLogIndex
-			for reply.FirstIndex >= 0 && rf.log[reply.FirstIndex].Term == reply.ConflictingTerm {
-				reply.FirstIndex--
+			for pos >= 0 && rf.log[pos].Term == reply.ConflictingTerm {
+				pos--
 			}
-			reply.FirstIndex++
+			if pos < 0 {
+				reply.FirstIndex = 1
+			} else {
+				reply.FirstIndex = rf.pos2index(pos + 1)
+			}
 		}
 		rf.logger.Printf("Log doesn't contain a matching entry at PrevLogIndex: PrevLogTerm = %v, log entry = %v", args.PrevLogTerm, entry)
-		rf.logger.Printf("Fast stepback: ConflictingTerm = %v, FirstIndex = %v, log = %v", reply.ConflictingTerm, reply.FirstIndex, rf.log)
+		rf.logger.Printf("Fast stepback: ConflictingTerm = %v, FirstIndex = %v, pos = %v, log = %v", reply.ConflictingTerm, reply.FirstIndex, rf.index2pos(reply.FirstIndex), rf.log)
 		return
 	}
 	// add these entries
 	oldLog := rf.log
 	for i, entry := range args.Entries {
-		if len(rf.log) <= i+args.PrevLogIndex+1 { // out of existing log entries, simply append it
+		pos := rf.index2pos(args.PrevLogIndex + i + 1)
+		if len(rf.log) <= pos { // out of existing log entries, simply append it
 			rf.log = append(rf.log, entry)
 		} else { // still within existing log entries
-			if entry.Term != rf.log[args.PrevLogIndex+i+1].Term { // conflicting entry
-				rf.log = rf.log[:args.PrevLogIndex+i+1] // delete the existing entry and all that follow it
+			if entry.Term != rf.log[pos].Term { // conflicting entry
+				rf.log = rf.log[:pos] // delete the existing entry and all that follow it
 				rf.log = append(rf.log, entry)
 			}
 			// otherwise, do nothing to this entry

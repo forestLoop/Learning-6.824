@@ -61,13 +61,13 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 		rf.logger.Printf("Sorry but I'm not the leader, fail to start: command = %v, state = %v", command, rf.state)
 		return
 	}
+	term = rf.currentTerm
 	rf.log = append(rf.log, &LogEntry{
-		Term:    rf.currentTerm,
+		Term:    term,
 		Command: command,
 	})
 	rf.persist()
-	index = len(rf.log) - 1
-	term = rf.currentTerm
+	index = rf.getLastIndex()
 	rf.logger.Printf("A log entry is appended: term = %v, index = %v, command = %v", term, index, command)
 	return
 }
@@ -120,9 +120,11 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		applyCond:    nil,
 		applyCh:      applyCh,
 		// Persistent state on all servers
-		currentTerm: 0,
-		votedFor:    -1,
-		log:         []*LogEntry{{0, nil}}, // add one dummy log entry for simplicity in coding
+		currentTerm:         0,
+		votedFor:            -1,
+		log:                 []*LogEntry{{0, nil}}, // add one dummy log entry for simplicity in coding
+		lastTermInSnapshot:  -1,
+		lastIndexInSnapshot: -1,
 		// Volatile state on all servers
 		commitIndex: 0,
 		lastApplied: 0,
