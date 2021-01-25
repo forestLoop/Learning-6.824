@@ -69,6 +69,8 @@ func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) 
 	rf.persist()
 	index = rf.getLastIndex()
 	rf.logger.Printf("A log entry is appended: term = %v, index = %v, command = %v", term, index, command)
+	// do log replication immediately to speed up some test cases
+	rf.doLogReplication()
 	return
 }
 
