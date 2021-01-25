@@ -190,6 +190,7 @@ func (rf *Raft) commitIndexDaemon() {
 		sortedMatchIndex := append([]int(nil), rf.matchIndex...)
 		sort.Ints(sortedMatchIndex)
 		newCommitIndex := sortedMatchIndex[len(rf.peers)/2+1]
+		rf.logger.Printf("newCommitIndex = %v, rf.commitIndex = %v, rf.lastIncludedIndex = %v", newCommitIndex, rf.commitIndex, rf.lastIncludedIndex)
 		for newCommitIndex > rf.commitIndex && rf.log[rf.index2pos(newCommitIndex)].Term != rf.currentTerm {
 			newCommitIndex--
 		}

@@ -64,4 +64,10 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.logger.Fatal("Failed to read lastIncludedTerm:", err)
 	}
 	rf.currentTerm, rf.votedFor, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.log = currentTerm, votedFor, lastIncludedIndex, lastIncludedTerm, log
+	if rf.lastIncludedIndex > rf.commitIndex {
+		rf.commitIndex = rf.lastIncludedIndex
+	}
+	if rf.lastIncludedIndex > rf.lastApplied {
+		rf.lastApplied = rf.lastIncludedIndex
+	}
 }

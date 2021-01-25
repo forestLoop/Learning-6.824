@@ -176,17 +176,15 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if rf.isValidIndex(args.LastIncludedIndex) && rf.getEntry(args.LastIncludedIndex).Term == args.LastIncludedTerm {
 		rf.logger.Printf("Matched snapshot, retain remaining log entries: args.LastIncludedIndex = %v, args.LastIncludedTerm = %v, entry = %v", args.LastIncludedIndex, args.LastIncludedTerm, rf.getEntry(args.LastIncludedIndex))
 		rf.discardEntriesBefore(args.LastIncludedIndex, false)
-		if rf.commitIndex < args.LastIncludedIndex {
-			// in case commitIndex is larger, in which situation we then need to apply following entries
-			rf.commitIndex = args.LastIncludedIndex
-		}
 	} else {
 		rf.logger.Printf("Discard the entire log")
 		rf.discardEntriesBefore(rf.getLastIndex(), false)
-		rf.lastIncludedIndex = args.LastIncludedIndex
-		rf.lastIncludedTerm = args.LastIncludedTerm
-		rf.commitIndex = args.LastIncludedIndex
 	}
+	// repeatedly set lastIncludedIndex and lastIncludedTerm to override discardEntriesBefore
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+	// note that commitIndex might not be updated if args.LastIncludedIndex <= rf.commitIndex
+	rf.tryUpdateCommitIndex(args.LastIncludedIndex)
 	// set lastApplied
 	rf.lastApplied = args.LastIncludedIndex
 	// persist with snapshot
