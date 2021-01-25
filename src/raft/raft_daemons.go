@@ -5,6 +5,37 @@ import (
 	"time"
 )
 
+// Warning: must hold lock when calling this function
+func (rf *Raft) sendSnapshotTo(server int) {
+	args := InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderID:          rf.me,
+		LastIncludedIndex: rf.lastIncludedIndex,
+		LastIncludedTerm:  rf.lastIncludedTerm,
+		Data:              rf.persister.ReadSnapshot(),
+	}
+	go func() {
+		rf.logger.Printf("Send InstallSnapshot RPC to peer %v: args = %v", server, args)
+		reply := InstallSnapshotReply{}
+		attempts := 1
+		for !rf.peers[server].Call("Raft.InstallSnapshot", &args, &reply) {
+			attempts++
+			if attempts > maxAttempts {
+				return
+			}
+		}
+		rf.logger.Printf("Receive reply for InstallSnapshot RPC from peer %v: reply = %v, attempts = %v", server, reply, attempts)
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		rf.checkTerm(reply.Term)
+		if rf.state != Leader || args.Term != rf.currentTerm {
+			return // discard outdated reply
+		}
+		rf.nextIndex[server] = rf.getLastIndex() // jump directly to last index and step back in the future
+		rf.matchIndex[server] = args.LastIncludedIndex
+	}()
+}
+
 func (rf *Raft) logReplicationDaemon() {
 	rf.logger.Print("Start logReplicationDaemon goroutine.")
 	defer rf.logger.Print("Stop logReplicationDaemon goroutine.")
@@ -20,17 +51,25 @@ func (rf *Raft) logReplicationDaemon() {
 				continue
 			}
 			prevLogIndex := rf.nextIndex[i] - 1
-			prevLogPos := rf.index2pos(prevLogIndex)
-			if prevLogPos < 0 {
-				rf.logger.Fatal("TODO: send snapshot instead")
+			if prevLogIndex < rf.lastIncludedIndex {
+				rf.logger.Printf("The leader has discarded log entries needed, so send snapshot instead: prevLogIndex = %v, rf.lastIncludedIndex = %v", prevLogIndex, rf.lastIncludedIndex)
+				rf.sendSnapshotTo(i)
+				continue
 			}
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderID:     rf.me,
 				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  rf.log[prevLogPos].Term,
 				LeaderCommit: rf.commitIndex,
-				Entries:      rf.log[prevLogPos+1:],
+			}
+			if prevLogIndex == rf.lastIncludedIndex { // exactly the last log entry in snapshot
+				rf.logger.Printf("Use the last included entry in snapshot: prevLogIndex = %v, rf.lastIncludedIndex = %v", prevLogIndex, rf.lastIncludedIndex)
+				args.PrevLogTerm = rf.lastIncludedTerm
+				args.Entries = rf.log
+			} else { // currently available log entry
+				prevLogPos := rf.index2pos(prevLogIndex)
+				args.PrevLogTerm = rf.log[prevLogPos].Term
+				args.Entries = rf.log[prevLogPos+1:]
 			}
 			go func(server int, args AppendEntriesArgs) {
 				rf.logger.Printf("Send AppendEntries RPC to peer %v: args = %v", server, args)

@@ -85,6 +85,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.resetElectionTimer()
 	// reply false if log doesn’t contain an entry at PrevLogIndex whose term matches PrevLogTerm
 	matched := (rf.isValidIndex(args.PrevLogIndex) && rf.getEntry(args.PrevLogIndex).Term == args.PrevLogTerm)
+	// special case: prevLogIndex is exactly the last included index in snapshot
+	matched = matched || (rf.lastIncludedIndex == args.PrevLogIndex && rf.lastIncludedTerm == args.PrevLogTerm)
 	if !matched {
 		var entry *LogEntry = nil
 		pos := rf.index2pos(args.PrevLogIndex)
@@ -135,4 +137,60 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.tryUpdateCommitIndex(newCommitIndex)
 	}
 	reply.Success = true
+}
+
+// --- InstallSnapshot RPC ---
+
+type InstallSnapshotArgs struct {
+	Term              int    // leader's term
+	LeaderID          int    // so followers can redirect clients
+	LastIncludedIndex int    // the snapshot replaces all entries up through and including this index
+	LastIncludedTerm  int    // term of LastIncludedIndex
+	Data              []byte // actual data for snapshot
+}
+
+type InstallSnapshotReply struct {
+	Term int // currentTerm, for leader to update itself
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.logger.Printf("Start to handle incoming InstallSnapshot RPC: args = %v", args)
+	rf.logger.Printf("rf.log = %v, rf.lastIncludedIndex = %v", rf.log, rf.lastIncludedIndex)
+	defer rf.logger.Printf("Finish handling incoming InstallSnapshot RPC: reply = %v", reply)
+	rf.checkTerm(args.Term)
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		rf.logger.Printf("args.Term (%v) < currentTerm (%v)", args.Term, rf.currentTerm)
+		return
+	}
+	// till now, we are sure this RPC is from the current leader
+	rf.resetElectionTimer()
+	if args.LastIncludedIndex <= rf.lastIncludedIndex { // this snapshot is stale
+		rf.logger.Printf("The snapshot is stale: args.LastIncludedIndex = %v, rf.lastIncludedIndex = %v", args.LastIncludedIndex, rf.lastIncludedIndex)
+		return
+	}
+	// existing log entry has same index and term as snapshot’s last included entry
+	// retain log entries following it and reply
+	if rf.isValidIndex(args.LastIncludedIndex) && rf.getEntry(args.LastIncludedIndex).Term == args.LastIncludedTerm {
+		rf.logger.Printf("Matched snapshot, retain remaining log entries: args.LastIncludedIndex = %v, args.LastIncludedTerm = %v, entry = %v", args.LastIncludedIndex, args.LastIncludedTerm, rf.getEntry(args.LastIncludedIndex))
+		rf.discardEntriesBefore(args.LastIncludedIndex, false)
+		if rf.commitIndex < args.LastIncludedIndex {
+			// in case commitIndex is larger, in which situation we then need to apply following entries
+			rf.commitIndex = args.LastIncludedIndex
+		}
+	} else {
+		rf.logger.Printf("Discard the entire log")
+		rf.discardEntriesBefore(rf.getLastIndex(), false)
+		rf.lastIncludedIndex = args.LastIncludedIndex
+		rf.lastIncludedTerm = args.LastIncludedTerm
+		rf.commitIndex = args.LastIncludedIndex
+	}
+	// set lastApplied
+	rf.lastApplied = args.LastIncludedIndex
+	// persist with snapshot
+	rf.persistWithSnapshot(args.Data)
+	// reset state machine using this snapshot content
+	rf.initSnapshot(args.Data)
 }

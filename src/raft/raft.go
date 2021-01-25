@@ -97,7 +97,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) TakeSnapshot(snapshot []byte, lastIncludedIndex int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.discardEntriesBefore(lastIncludedIndex)
+	rf.discardEntriesBefore(lastIncludedIndex, true)
 	rf.persistWithSnapshot(snapshot)
 }
 
