@@ -99,6 +99,7 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) TakeSnapshot(snapshot []byte, lastIncludedIndex int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.logger.Printf("Get a snapshot from K/V server: lastIncludedIndex = %v", lastIncludedIndex)
 	rf.discardEntriesBefore(lastIncludedIndex, true)
 	rf.persistWithSnapshot(snapshot)
 }
