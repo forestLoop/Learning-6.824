@@ -11,7 +11,7 @@ import (
 const (
 	electionTimeoutMin int = 700  // ms
 	electionTimeoutMax int = 1000 // ms
-	checkPeriod            = 50 * time.Millisecond
+	checkPeriod            = 20 * time.Millisecond
 	heartbeatInterval      = 120 * time.Millisecond
 	maxAttempts            = 1 // max attempts for each RPC request
 )
