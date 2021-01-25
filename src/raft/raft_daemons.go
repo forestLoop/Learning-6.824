@@ -180,7 +180,7 @@ func (rf *Raft) commitIndexDaemon() {
 	rf.logger.Print("Start commitIndexDaemon goroutine.")
 	defer rf.logger.Print("Stop commitIndexDaemon goroutine.")
 	for !rf.killed() {
-		time.Sleep(heartbeatInterval)
+		time.Sleep(checkPeriod)
 		rf.leaderCond.L.Lock()
 		// only advance commitIndex if it's leader
 		for rf.state != Leader {
@@ -203,7 +203,7 @@ func (rf *Raft) applyMessagesDaemon() {
 	rf.logger.Print("Start applyMessagesDaemon goroutine.")
 	defer rf.logger.Print("Stop applyMessagesDaemon goroutine.")
 	for !rf.killed() {
-		time.Sleep(heartbeatInterval)
+		time.Sleep(checkPeriod)
 		rf.applyCond.L.Lock()
 		for rf.commitIndex <= rf.lastApplied {
 			rf.applyCond.Wait()
