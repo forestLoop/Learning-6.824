@@ -210,12 +210,9 @@ func (rf *Raft) applyMessagesDaemon() {
 		}
 		rf.logger.Printf("Ready to apply messages: commitIndex = %v, lastApplied = %v, log = %v", rf.commitIndex, rf.lastApplied, rf.log)
 		commitIndex := rf.commitIndex
-		rf.applyCond.L.Unlock() // release lock here as applying messages may be blocking
-		// no need to hold mutex for r/w lastApplied as only this goroutine would r/w it
 		for rf.lastApplied < commitIndex {
 			rf.lastApplied++
 			// but it's necessary to hold mutex when reading rf.log
-			rf.applyCond.L.Lock()
 			pos := rf.index2pos(rf.lastApplied)
 			msg := ApplyMsg{
 				CommandValid: true,
@@ -223,10 +220,12 @@ func (rf *Raft) applyMessagesDaemon() {
 				CommandIndex: rf.lastApplied,
 				CommandTerm:  rf.log[pos].Term,
 			}
-			rf.applyCond.L.Unlock()
+			rf.applyCond.L.Unlock() // release lock as applyCh might block
 			rf.logger.Printf("Apply message: msg = %v", msg)
 			rf.applyCh <- msg
 			rf.logger.Printf("Applied: msg = %v", msg)
+			rf.applyCond.L.Lock() // re-acquire it as we need to access rf.lastApplied in loop condition
 		}
+		rf.applyCond.L.Unlock()
 	}
 }
